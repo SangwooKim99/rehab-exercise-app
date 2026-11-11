@@ -780,6 +780,11 @@ export const FirebaseService = {
     const db = getFirebaseFirestore();
     if (!db || !patientId) return [];
 
+    const auth = getFirebaseAuth();
+    if (auth?.currentUser && auth.currentUser.uid !== patientId) {
+      return [];
+    }
+
     try {
       const q = query(
         collection(db, 'connections'),
@@ -807,6 +812,11 @@ export const FirebaseService = {
   async getConnectionsForTherapist(therapistId: string): Promise<PatientTherapistConnection[]> {
     const db = getFirebaseFirestore();
     if (!db || !therapistId) return [];
+
+    const auth = getFirebaseAuth();
+    if (auth?.currentUser && auth.currentUser.uid !== therapistId) {
+      return [];
+    }
 
     try {
       const q = query(
@@ -836,6 +846,11 @@ export const FirebaseService = {
     const db = getFirebaseFirestore();
     if (!db || !patientId) return () => {};
 
+    const auth = getFirebaseAuth();
+    if (auth?.currentUser && auth.currentUser.uid !== patientId) {
+      return () => {};
+    }
+
     const q = query(
       collection(db, 'connections'),
       where('patientId', '==', patientId)
@@ -861,6 +876,11 @@ export const FirebaseService = {
   subscribeToTherapistConnections(therapistId: string, callback: (connections: PatientTherapistConnection[]) => void): () => void {
     const db = getFirebaseFirestore();
     if (!db || !therapistId) return () => {};
+
+    const auth = getFirebaseAuth();
+    if (auth?.currentUser && auth.currentUser.uid !== therapistId) {
+      return () => {};
+    }
 
     const q = query(
       collection(db, 'connections'),
@@ -940,6 +960,11 @@ export const FirebaseService = {
     const db = getFirebaseFirestore();
     if (!db || !therapistId) return [];
 
+    const auth = getFirebaseAuth();
+    if (auth?.currentUser && auth.currentUser.uid !== therapistId) {
+      return [];
+    }
+
     try {
       // 1. connections 컬렉션에서 활성 연결 목록 조회
       const q = query(
@@ -989,7 +1014,7 @@ export const FirebaseService = {
       const results = await Promise.all(patientPromises);
       return results.filter((p): p is Patient => p !== null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'connections');
+      console.warn('getConnectedPatientsForTherapist error:', err);
       return [];
     }
   },

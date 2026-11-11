@@ -226,7 +226,12 @@ export default function App() {
 
     // 2. Therapist Sync: Query connections collection + individual users getDoc (Requirement 4)
     if (currentUser.role === 'therapist') {
-      const therapistId = currentUser.id;
+      const authUid = getFirebaseAuth()?.currentUser?.uid;
+      const therapistId = authUid || currentUser.id;
+      // If currentUser is a local demo therapist and not the currently logged in Firebase user, skip remote sync
+      if (authUid && currentUser.id !== authUid) {
+        return;
+      }
 
       // 연결된 담당 환자 초기 조회
       FirebaseService.getConnectedPatientsForTherapist(therapistId).then((patients) => {
