@@ -462,8 +462,8 @@ export const FirebaseService = {
         logs.push(d.data() as WorkoutLog);
       });
       return logs.sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime());
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, path);
+    } catch (error: any) {
+      console.warn('Fetch workout logs warning:', error?.message || error);
       return [];
     }
   },
@@ -519,8 +519,8 @@ export const FirebaseService = {
         return (data.assignedProgram as AssignedExercise[]) || [];
       }
       return null;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
+    } catch (error: any) {
+      console.warn('Fetch prescribed program warning:', error?.message || error);
       return null;
     }
   },

@@ -8,6 +8,7 @@ import { AuthUser, Patient, Exercise, AssignedExercise } from './types/rehab';
 import { StorageService, subscribeToRehabStore } from './services/storageService';
 import { AuthService, subscribeToAuth } from './services/authService';
 import { FirebaseService } from './services/firebaseService';
+import { getFirebaseAuth } from './services/firebase';
 
 // Common Components
 import { Navbar } from './components/common/Navbar';
@@ -41,8 +42,8 @@ export default function App() {
     return AuthService.getSessionUser();
   });
 
-  // Unauthenticated screen: 'welcome' | 'login' | 'signup'
-  const [authScreen, setAuthScreen] = useState<'welcome' | 'login' | 'signup'>('welcome');
+  // Unauthenticated screen: 'welcome' | 'login' | 'signup' (Default to 'login' for clean 2-column first screen)
+  const [authScreen, setAuthScreen] = useState<'welcome' | 'login' | 'signup'>('login');
   const [signupInitialRole, setSignupInitialRole] = useState<'patient' | 'therapist'>('patient');
 
   // Therapist invite link / code state
@@ -131,7 +132,13 @@ export default function App() {
 
     // 1. Patient Sync
     if (currentUser.role === 'patient') {
-      const patientId = currentUser.patientId || currentUser.id;
+      const authUid = getFirebaseAuth()?.currentUser?.uid;
+      // In Firebase Auth, a patient's own ID in Firestore is ALWAYS their auth UID
+      const patientId = authUid || currentUser.id;
+      // If currentUser is a local demo patient and not the currently logged in Firebase user, skip remote sync
+      if (authUid && currentUser.id !== authUid) {
+        return;
+      }
 
       // 운동 기록 동기화
       FirebaseService.getWorkoutLogs(patientId).then((remoteLogs) => {
@@ -460,44 +467,20 @@ export default function App() {
     }
   };
 
-  // 1. Unauthenticated View (Welcome Landing, Login, Sign Up)
+  // 1. Unauthenticated View (Clean 2-Column Login & Sign Up)
   if (!currentUser) {
     return (
       <>
-        {authScreen === 'welcome' && (
-          <WelcomeLandingView
-            onStartAsPatient={() => {
-              setSignupInitialRole('patient');
-              setAuthScreen('signup');
-            }}
-            onStartAsTherapist={() => {
-              setSignupInitialRole('therapist');
-              setAuthScreen('signup');
-            }}
-            onNavigateToLogin={() => setAuthScreen('login')}
-            onDemoPatientLogin={handleDemoPatientLogin}
-            onDemoTherapistLogin={handleDemoTherapistLogin}
-            inviteTherapist={pendingInviteTherapist}
-            onAcceptInvite={() => {
-              setSignupInitialRole('patient');
-              setAuthScreen('signup');
-            }}
-            onClearInvite={() => setPendingInviteCode('')}
-          />
-        )}
-
-        {authScreen === 'signup' && (
+        {authScreen === 'signup' ? (
           <SignUpView
             initialRole={signupInitialRole}
             initialInviteCode={pendingInviteCode}
             inviteTherapist={pendingInviteTherapist}
             onSignUpSuccess={handleSignUpSuccess}
             onNavigateToLogin={() => setAuthScreen('login')}
-            onNavigateToHome={() => setAuthScreen('welcome')}
+            onNavigateToHome={() => setAuthScreen('login')}
           />
-        )}
-
-        {authScreen === 'login' && (
+        ) : (
           <LoginView
             onLoginSuccess={handleLoginSuccess}
             inviteTherapist={pendingInviteTherapist}
@@ -505,7 +488,6 @@ export default function App() {
               setSignupInitialRole('patient');
               setAuthScreen('signup');
             }}
-            onNavigateToHome={() => setAuthScreen('welcome')}
           />
         )}
 
