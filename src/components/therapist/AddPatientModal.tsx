@@ -21,7 +21,9 @@ import {
   Sparkles,
   HelpCircle,
   ArrowRight,
-  ShieldCheck
+  ShieldCheck,
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 
 interface AddPatientModalProps {
@@ -44,6 +46,8 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
   const [codeCopied, setCodeCopied] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+  const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('info');
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -101,16 +105,22 @@ ${inviteUrl}
 
   // Accept or Reject Request
   const handleRequestResponse = async (requestId: string, accept: boolean) => {
+    if (processingRequestId) return;
+    setProcessingRequestId(requestId);
     try {
       const res = await StorageService.respondConnectionRequest(requestId, accept, currentUser);
+      setToastType(res.success ? 'success' : 'error');
       setToastMsg(res.message);
-      setTimeout(() => setToastMsg(''), 3000);
-      if (onPatientAdded) {
+      setTimeout(() => setToastMsg(''), 3500);
+      if (res.success && onPatientAdded) {
         onPatientAdded();
       }
     } catch (err: any) {
+      setToastType('error');
       setToastMsg(`처리 실패: ${err?.message || '오류 발생'}`);
-      setTimeout(() => setToastMsg(''), 3000);
+      setTimeout(() => setToastMsg(''), 3500);
+    } finally {
+      setProcessingRequestId(null);
     }
   };
 
@@ -184,8 +194,16 @@ ${inviteUrl}
 
         {/* Toast alert inside modal */}
         {toastMsg && (
-          <div className="bg-emerald-50 border-b border-emerald-200 px-5 py-2.5 text-xs text-emerald-900 font-bold flex items-center gap-2 animate-in fade-in">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <div className={`px-5 py-2.5 text-xs font-bold flex items-center gap-2 border-b animate-in fade-in ${
+            toastType === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-900'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}>
+            {toastType === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            )}
             <span>{toastMsg}</span>
           </div>
         )}
@@ -444,18 +462,29 @@ ${inviteUrl}`}
                       <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                         <button
                           type="button"
+                          disabled={processingRequestId === req.id}
                           onClick={() => handleRequestResponse(req.id, false)}
-                          className="px-3 py-1.5 rounded-xl border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-bold transition-colors cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl border border-gray-300 hover:bg-gray-100 disabled:opacity-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer"
                         >
-                          거절
+                          {processingRequestId === req.id ? '처리 중...' : '거절'}
                         </button>
                         <button
                           type="button"
+                          disabled={processingRequestId === req.id}
                           onClick={() => handleRequestResponse(req.id, true)}
-                          className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
+                          className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-extrabold shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
                         >
-                          <UserCheck className="w-3.5 h-3.5" />
-                          <span>연결 수락</span>
+                          {processingRequestId === req.id ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>처리 중...</span>
+                            </>
+                          ) : (
+                            <>
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>연결 수락</span>
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>

@@ -21,6 +21,7 @@ import {
   KeyRound,
   Copy,
   AlertCircle,
+  Loader2,
   UserCheck,
   UserX,
   MessageSquare,
@@ -50,6 +51,8 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
   const [modalDefaultTab, setModalDefaultTab] = useState<'invite' | 'code' | 'requests'>('invite');
   const [copied, setCopied] = useState(false);
   const [actionMsg, setActionMsg] = useState<string>('');
+  const [actionStatus, setActionStatus] = useState<'success' | 'error' | null>(null);
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
 
   const stats = StorageService.getTherapistOverviewStats(currentUser);
   const defaultTherapist = StorageService.getTherapist();
@@ -69,13 +72,25 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
   };
 
   const handleRequestResponse = async (requestId: string, accept: boolean) => {
+    if (processingRequestId) return;
+    setProcessingRequestId(requestId);
     try {
       const res = await StorageService.respondConnectionRequest(requestId, accept, currentUser);
+      setActionStatus(res.success ? 'success' : 'error');
       setActionMsg(res.message);
-      setTimeout(() => setActionMsg(''), 4000);
+      setTimeout(() => {
+        setActionMsg('');
+        setActionStatus(null);
+      }, 4000);
     } catch (err: any) {
+      setActionStatus('error');
       setActionMsg(`응답 처리 실패: ${err?.message || '오류 발생'}`);
-      setTimeout(() => setActionMsg(''), 4000);
+      setTimeout(() => {
+        setActionMsg('');
+        setActionStatus(null);
+      }, 4000);
+    } finally {
+      setProcessingRequestId(null);
     }
   };
 
@@ -99,8 +114,16 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
     <div className="space-y-6 pb-12">
       {/* Action Notification Banner */}
       {actionMsg && (
-        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-900 font-bold flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+        <div className={`p-3.5 border rounded-2xl text-xs font-bold flex items-center gap-2 animate-in fade-in ${
+          actionStatus === 'error'
+            ? 'bg-rose-50 border-rose-200 text-rose-900'
+            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+        }`}>
+          {actionStatus === 'error' ? (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          )}
           <span>{actionMsg}</span>
         </div>
       )}
@@ -149,18 +172,29 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    disabled={processingRequestId === req.id}
                     onClick={() => handleRequestResponse(req.id, false)}
-                    className="px-3.5 py-1.5 rounded-xl border border-gray-300 hover:bg-gray-100 text-gray-700 text-xs font-bold transition-colors cursor-pointer"
+                    className="px-3.5 py-1.5 rounded-xl border border-gray-300 hover:bg-gray-100 disabled:opacity-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer"
                   >
-                    거절
+                    {processingRequestId === req.id ? '처리 중...' : '거절'}
                   </button>
                   <button
                     type="button"
+                    disabled={processingRequestId === req.id}
                     onClick={() => handleRequestResponse(req.id, true)}
-                    className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-extrabold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
-                    <UserCheck className="w-3.5 h-3.5" />
-                    <span>연결 수락</span>
+                    {processingRequestId === req.id ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>처리 중...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>연결 수락</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

@@ -19,7 +19,9 @@ import {
   Copy,
   XCircle,
   UserX,
-  HelpCircle
+  HelpCircle,
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 import { DisconnectConfirmModal } from '../common/DisconnectConfirmModal';
 
@@ -44,6 +46,8 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
 
   const [copied, setCopied] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string>('');
+  const [feedbackType, setFeedbackType] = useState<'success' | 'error' | null>(null);
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
 
   // Disconnect Confirmation Modal State
   const [patientToDisconnect, setPatientToDisconnect] = useState<Patient | null>(null);
@@ -56,14 +60,26 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
   };
 
   const handleRespondRequest = async (requestId: string, accept: boolean) => {
+    if (processingRequestId) return;
+    setProcessingRequestId(requestId);
     try {
       const res = await StorageService.respondConnectionRequest(requestId, accept, currentUser);
+      setFeedbackType(res.success ? 'success' : 'error');
       setFeedbackMsg(res.message);
-      setTimeout(() => setFeedbackMsg(''), 4000);
+      setTimeout(() => {
+        setFeedbackMsg('');
+        setFeedbackType(null);
+      }, 4000);
       onRefreshData();
     } catch (err: any) {
+      setFeedbackType('error');
       setFeedbackMsg(`응답 처리 실패: ${err?.message || '오류 발생'}`);
-      setTimeout(() => setFeedbackMsg(''), 4000);
+      setTimeout(() => {
+        setFeedbackMsg('');
+        setFeedbackType(null);
+      }, 4000);
+    } finally {
+      setProcessingRequestId(null);
     }
   };
 
@@ -108,8 +124,16 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
       </div>
 
       {feedbackMsg && (
-        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 font-bold flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+        <div className={`p-3.5 border rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in ${
+          feedbackType === 'error'
+            ? 'bg-rose-50 border-rose-200 text-rose-900'
+            : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+        }`}>
+          {feedbackType === 'error' ? (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          )}
           <span>{feedbackMsg}</span>
         </div>
       )}
@@ -217,17 +241,26 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
                   <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                     <button
                       type="button"
+                      disabled={processingRequestId === req.id}
                       onClick={() => handleRespondRequest(req.id, false)}
-                      className="py-1.5 px-3 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 font-semibold text-xs rounded-lg transition-colors"
+                      className="py-1.5 px-3 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-600 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
                     >
-                      거절
+                      {processingRequestId === req.id ? '처리 중...' : '거절'}
                     </button>
                     <button
                       type="button"
+                      disabled={processingRequestId === req.id}
                       onClick={() => handleRespondRequest(req.id, true)}
-                      className="py-1.5 px-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-xs transition-colors"
+                      className="py-1.5 px-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
                     >
-                      연결 수락 (승인)
+                      {processingRequestId === req.id ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>처리 중...</span>
+                        </>
+                      ) : (
+                        <span>연결 수락 (승인)</span>
+                      )}
                     </button>
                   </div>
                 </div>

@@ -622,7 +622,9 @@ export const FirebaseService = {
     const db = getFirebaseFirestore();
     if (!db) return false;
 
-    const canonicalId = `${connection.patientId}_${connection.therapistId}`;
+    const rawId = connection.connectionId || `${connection.patientId}_${connection.therapistId}`;
+    const cleanId = rawId.replace(/^req-/, '');
+    const canonicalId = cleanId.includes('_') ? cleanId : `${connection.patientId}_${connection.therapistId}`;
     const path = `connections/${canonicalId}`;
     const nowStr = new Date().toISOString();
     const connRef = doc(db, 'connections', canonicalId);
@@ -684,6 +686,23 @@ export const FirebaseService = {
       // 2. 승인 (pending -> connected)
       if (connection.status === 'connected') {
         try {
+          // 먼저 현재 문서 상태를 안전하게 조회 (당사자는 getDoc 허용)
+          let currentStatus: string | undefined = undefined;
+          try {
+            const snap = await getDoc(connRef);
+            if (snap.exists()) {
+              currentStatus = snap.data()?.status;
+            }
+          } catch (getErr) {
+            console.warn('Check connection status prior to approval deferred:', getErr);
+          }
+
+          // 이미 승인되어 connected 상태라면 중복 쓰기 없이 즉시 성공 처리 (원자적 멱등성 보장)
+          if (currentStatus === 'connected') {
+            return true;
+          }
+
+          // pending 상태이거나 최초 갱신 시 오직 허용된 키(['status', 'connectedAt', 'updatedAt'])만 원자적 갱신
           await updateDoc(connRef, {
             status: 'connected',
             connectedAt: connection.connectedAt || nowStr,
@@ -691,27 +710,8 @@ export const FirebaseService = {
           });
           return true;
         } catch (updErr: any) {
-          // 만약 문서가 없는데 즉시 승인 요청된 특수 케이스라면 create -> update 처리
-          const createPayload: Record<string, any> = {
-            connectionId: canonicalId,
-            patientId: connection.patientId,
-            patientName: connection.patientName || '환자',
-            therapistId: connection.therapistId,
-            therapistName: connection.therapistName || '물리치료사',
-            status: 'pending',
-            requestedBy: connection.requestedBy || 'patient',
-            createdAt: connection.createdAt || nowStr,
-            updatedAt: nowStr
-          };
-          if (connection.requestType) createPayload.requestType = connection.requestType;
-          if (connection.inviteCode) createPayload.inviteCode = connection.inviteCode;
-          await setDoc(connRef, createPayload);
-          await updateDoc(connRef, {
-            status: 'connected',
-            connectedAt: connection.connectedAt || nowStr,
-            updatedAt: nowStr
-          });
-          return true;
+          console.error('Firestore connection approval updateDoc failed:', updErr);
+          throw updErr;
         }
       }
 
@@ -748,6 +748,32 @@ export const FirebaseService = {
   },
 
   /**
+   * 단일 연결 문서 조회 (connections/{connectionId})
+   * - 실제 Firestore connections 문서의 원본 데이터와 문서 ID(doc.id) 반환
+   */
+  async getConnectionDoc(connectionId: string): Promise<PatientTherapistConnection | null> {
+    const db = getFirebaseFirestore();
+    if (!db || !connectionId) return null;
+
+    try {
+      const cleanId = connectionId.replace(/^req-/, '');
+      const connRef = doc(db, 'connections', cleanId);
+      const snap = await getDoc(connRef);
+      if (!snap.exists()) {
+        return null;
+      }
+      const data = snap.data() as PatientTherapistConnection;
+      return {
+        ...data,
+        connectionId: snap.id
+      };
+    } catch (err: any) {
+      console.warn(`getConnectionDoc(${connectionId}) error:`, err);
+      throw err;
+    }
+  },
+
+  /**
    * 환자의 connections 컬렉션 목록 조회
    */
   async getConnectionsForPatient(patientId: string): Promise<PatientTherapistConnection[]> {
@@ -761,7 +787,13 @@ export const FirebaseService = {
       );
       const snap = await getDocs(q);
       const conns: PatientTherapistConnection[] = [];
-      snap.forEach((d) => conns.push(d.data() as PatientTherapistConnection));
+      snap.forEach((d) => {
+        const data = d.data() as PatientTherapistConnection;
+        conns.push({
+          ...data,
+          connectionId: d.id
+        });
+      });
       return conns.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     } catch (err) {
       console.warn('getConnectionsForPatient error:', err);
@@ -783,7 +815,13 @@ export const FirebaseService = {
       );
       const snap = await getDocs(q);
       const conns: PatientTherapistConnection[] = [];
-      snap.forEach((d) => conns.push(d.data() as PatientTherapistConnection));
+      snap.forEach((d) => {
+        const data = d.data() as PatientTherapistConnection;
+        conns.push({
+          ...data,
+          connectionId: d.id
+        });
+      });
       return conns.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     } catch (err) {
       console.warn('getConnectionsForTherapist error:', err);
@@ -804,7 +842,13 @@ export const FirebaseService = {
     );
     return onSnapshot(q, (snap) => {
       const conns: PatientTherapistConnection[] = [];
-      snap.forEach((d) => conns.push(d.data() as PatientTherapistConnection));
+      snap.forEach((d) => {
+        const data = d.data() as PatientTherapistConnection;
+        conns.push({
+          ...data,
+          connectionId: d.id
+        });
+      });
       callback(conns);
     }, (err) => {
       console.warn('subscribeToPatientConnections error:', err);
@@ -824,7 +868,13 @@ export const FirebaseService = {
     );
     return onSnapshot(q, (snap) => {
       const conns: PatientTherapistConnection[] = [];
-      snap.forEach((d) => conns.push(d.data() as PatientTherapistConnection));
+      snap.forEach((d) => {
+        const data = d.data() as PatientTherapistConnection;
+        conns.push({
+          ...data,
+          connectionId: d.id
+        });
+      });
       callback(conns);
     }, (err) => {
       console.warn('subscribeToTherapistConnections error:', err);

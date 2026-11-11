@@ -8,6 +8,7 @@ import { Patient, Exercise, UserAccount, formatPatientDiagnosis } from '../../ty
 import { StorageService } from '../../services/storageService';
 import { AuthService, formatTherapistDisplayName, getFeedbackAuthorDisplayName } from '../../services/authService';
 import { FirebaseService } from '../../services/firebaseService';
+import { isFirebaseConfigured } from '../../config/firebaseConfig';
 import { 
   CheckCircle2, 
   ChevronRight, 
@@ -59,32 +60,36 @@ export const PatientHome: React.FC<PatientHomeProps> = ({
       setMatchedTherapist(undefined);
       return;
     }
-    const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-    if (localMatch) {
-      setMatchedTherapist(localMatch);
-      return;
-    }
     let isMounted = true;
-    FirebaseService.findTherapistByConnectionCode(trimmed).then((remoteData) => {
-      if (!isMounted) return;
-      if (remoteData) {
-        setMatchedTherapist({
-          id: remoteData.therapistId,
-          username: remoteData.therapistId,
-          name: remoteData.name,
-          passwordHash: '',
-          role: 'therapist',
-          connectionCode: remoteData.connectionCode,
-          clinic: remoteData.clinic,
-          accountStatus: 'active',
-          registeredAt: remoteData.createdAt || new Date().toISOString()
-        });
-      } else {
-        setMatchedTherapist(undefined);
-      }
-    }).catch(() => {
-      if (isMounted) setMatchedTherapist(undefined);
-    });
+    if (isFirebaseConfigured()) {
+      FirebaseService.findTherapistByConnectionCode(trimmed).then((remoteData) => {
+        if (!isMounted) return;
+        if (remoteData) {
+          setMatchedTherapist({
+            id: remoteData.therapistId,
+            username: remoteData.therapistId,
+            name: remoteData.name,
+            passwordHash: '',
+            role: 'therapist',
+            connectionCode: remoteData.connectionCode,
+            clinic: remoteData.clinic,
+            accountStatus: 'active',
+            registeredAt: remoteData.createdAt || new Date().toISOString()
+          });
+        } else {
+          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
+          setMatchedTherapist(localMatch);
+        }
+      }).catch(() => {
+        if (isMounted) {
+          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
+          setMatchedTherapist(localMatch);
+        }
+      });
+    } else {
+      const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
+      setMatchedTherapist(localMatch);
+    }
     return () => { isMounted = false; };
   }, [inputCode]);
 
