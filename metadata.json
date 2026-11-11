@@ -1,0 +1,6 @@
+{
+  "name": "Rehab Exercise",
+  "description": "물리치료사와 대상자가 함께 사용하는 전문 재활운동 처방 및 수행 관리 프로토타입 웹앱",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

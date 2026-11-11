@@ -1,0 +1,162 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "사용자 비공개 프로필 문서 (환자 또는 물리치료사, UID를 키로 사용)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email", "description": "사용자 비공개 이메일 주소" },
+        "name": { "type": "string", "maxLength": 50, "description": "사용자 실명" },
+        "role": { "type": "string", "enum": ["patient", "therapist", "super_admin"], "description": "사용자 역할" },
+        "accountStatus": { "type": "string", "enum": ["active", "suspended"], "description": "계정 활성 상태" },
+        "isVerified": { "type": "boolean", "description": "물리치료사 전문 면허 검증 여부 (서버/Admin 부여)" },
+        "therapistVerification": { "type": "string", "enum": ["unverified", "verified"], "description": "치료사 인증 상태" },
+        "connectionCode": { "type": "string", "maxLength": 20, "description": "물리치료사 전용 연결 코드 (예: PT-GW-821)" },
+        "connectedTherapistId": { "type": "string", "description": "환자에게 배정된 물리치료사 UID" },
+        "connectedTherapistName": { "type": "string", "description": "환자에게 배정된 물리치료사 성명" },
+        "clinic": { "type": "string", "maxLength": 100, "description": "치료사 소속 병원/재활센터" },
+        "licenseCode": { "type": "string", "maxLength": 50, "description": "물리치료사 면허 번호" },
+        "age": { "type": "number", "description": "환자 나이" },
+        "gender": { "type": "string", "enum": ["남성", "여성"], "description": "환자 성별" },
+        "diagnosis": { "type": "string", "maxLength": 200, "description": "환자 진단명" },
+        "targetGoal": { "type": "string", "maxLength": 200, "description": "재활 목표" },
+        "therapistNotes": { "type": "string", "maxLength": 1000, "description": "치료사 임상 메모" },
+        "connectionStatus": { "type": "string", "enum": ["not_connected", "pending", "requested", "connected", "rejected", "disconnected"], "description": "치료사와의 연결 상태" },
+        "createdAt": { "type": "string", "description": "가입 일시" },
+        "updatedAt": { "type": "string", "description": "정보 수정 일시" }
+      },
+      "required": ["uid", "email", "name", "role", "accountStatus", "createdAt"]
+    },
+    "PublicTherapist": {
+      "title": "PublicTherapist",
+      "description": "환자 연결을 위해 공개되는 물리치료사 공용 디렉터리 정보 (개인정보 제외)",
+      "type": "object",
+      "properties": {
+        "therapistId": { "type": "string", "description": "물리치료사 UID" },
+        "name": { "type": "string", "description": "물리치료사 실명" },
+        "clinic": { "type": "string", "description": "소속 기관" },
+        "licenseCode": { "type": "string", "description": "면허 식별 코드" },
+        "connectionCode": { "type": "string", "description": "환자 연결 고유 코드 (예: PT-GW-821)" },
+        "updatedAt": { "type": "string", "description": "정보 갱신 일시" }
+      },
+      "required": ["therapistId", "name", "clinic", "connectionCode"]
+    },
+    "VerifiedTherapist": {
+      "title": "VerifiedTherapist",
+      "description": "서버/Admin SDK 또는 콘솔에서만 등록 가능한 공인 물리치료사 화이트리스트",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "치료사 UID" },
+        "name": { "type": "string", "description": "공인 치료사 실명" },
+        "licenseNumber": { "type": "string", "description": "면허 번호" },
+        "clinic": { "type": "string", "description": "소속 기관" },
+        "verifiedAt": { "type": "string", "description": "검증 완료 일시" }
+      },
+      "required": ["uid", "name", "licenseNumber", "verifiedAt"]
+    },
+    "PatientConnection": {
+      "title": "PatientConnection",
+      "description": "물리치료사와 환자 간의 1:1 재활 연동 관계 (키 형식: patientId_therapistId)",
+      "type": "object",
+      "properties": {
+        "connectionId": { "type": "string", "description": "연결 고유 식별자 (patientId_therapistId)" },
+        "patientId": { "type": "string", "description": "환자 UID" },
+        "patientName": { "type": "string", "description": "환자 성명" },
+        "therapistId": { "type": "string", "description": "물리치료사 UID" },
+        "therapistName": { "type": "string", "description": "물리치료사 성명" },
+        "status": { "type": "string", "enum": ["pending", "connected", "rejected", "disconnected"], "description": "연결 진행 상태" },
+        "requestedBy": { "type": "string", "enum": ["patient", "therapist"], "description": "연결을 요청한 주체" },
+        "createdAt": { "type": "string", "description": "요청 생성 일시" },
+        "connectedAt": { "type": "string", "description": "연결 승인 일시" },
+        "disconnectedAt": { "type": "string", "description": "연결 해제 일시" },
+        "requestType": { "type": "string", "enum": ["code", "invite"], "description": "요청 방식" },
+        "inviteCode": { "type": "string", "description": "초대 코드" }
+      },
+      "required": ["connectionId", "patientId", "patientName", "therapistId", "therapistName", "status", "requestedBy", "createdAt"]
+    },
+    "WorkoutLog": {
+      "title": "WorkoutLog",
+      "description": "환자가 일자별로 수행한 재활운동 결과 및 통증 기록",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "운동 기록 고유 식별자" },
+        "patientId": { "type": "string", "description": "기록을 작성한 환자 UID" },
+        "exerciseId": { "type": "string", "description": "운동 라이브러리 ID" },
+        "exerciseName": { "type": "string", "description": "운동 명칭" },
+        "date": { "type": "string", "description": "수행 날짜 (YYYY-MM-DD)" },
+        "completed": { "type": "boolean", "description": "완수 여부" },
+        "status": { "type": "string", "enum": ["completed", "partial", "skipped"], "description": "세부 수행 상태" },
+        "prescribedSets": { "type": "number", "description": "처방 세트 수" },
+        "prescribedReps": { "type": "number", "description": "처방 횟수" },
+        "actualSets": { "type": "number", "description": "실제 수행 세트 수" },
+        "actualReps": { "type": "number", "description": "실제 수행 횟수" },
+        "painLevel": { "type": "number", "description": "수행 후 통증 점수 (0-10 NRS)" },
+        "prePainLevel": { "type": "number", "description": "수행 전 통증 점수 (0-10 NRS)" },
+        "postPainLevel": { "type": "number", "description": "수행 직후 통증 점수 (0-10 NRS)" },
+        "difficulty": { "type": "string", "enum": ["쉬움", "보통", "어려움"], "description": "자각 체감 난이도" },
+        "patientNotes": { "type": "string", "maxLength": 500, "description": "환자 자가 피드백 메모" },
+        "loggedAt": { "type": "string", "description": "기록 저장 타임스탬프" }
+      },
+      "required": ["id", "patientId", "exerciseId", "exerciseName", "date", "completed", "loggedAt"]
+    },
+    "ClinicalFeedback": {
+      "title": "ClinicalFeedback",
+      "description": "물리치료사가 환자의 차트와 기록을 보고 전달하는 임상 소견",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "피드백 식별자" },
+        "patientId": { "type": "string", "description": "대상 환자 UID" },
+        "therapistId": { "type": "string", "description": "작성한 치료사 UID" },
+        "therapistName": { "type": "string", "description": "치료사 성명" },
+        "date": { "type": "string", "description": "작성 일자 (YYYY-MM-DD)" },
+        "content": { "type": "string", "maxLength": 1000, "description": "임상 소견 본문" },
+        "recommendation": { "type": "string", "maxLength": 500, "description": "권장 가이드 및 주의사항" },
+        "createdAt": { "type": "string", "description": "피드백 생성 일시" }
+      },
+      "required": ["id", "patientId", "therapistId", "therapistName", "date", "content", "createdAt"]
+    },
+    "PrescribedProgram": {
+      "title": "PrescribedProgram",
+      "description": "물리치료사가 환자에게 배정한 운동 프로그램 묶음",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string", "description": "환자 UID" },
+        "therapistId": { "type": "string", "description": "처방 치료사 UID" },
+        "assignedProgram": { "type": "array", "description": "배정된 운동 목록" },
+        "updatedAt": { "type": "string", "description": "최종 처방 변경 일시" }
+      },
+      "required": ["patientId", "therapistId", "assignedProgram", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/verifiedTherapists/{therapistId}": {
+      "schema": "VerifiedTherapist",
+      "description": "공인 물리치료사 화이트리스트 (서버/Admin 전용)"
+    },
+    "/publicTherapists/{therapistId}": {
+      "schema": "PublicTherapist",
+      "description": "환자 연결을 위한 치료사 공개 디렉터리 (개인정보 제외)"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "사용자 비공개 프로필 컬렉션 (UID를 문서 ID로 사용, 본인 및 연결된 상대방만 단일 get 가능)"
+    },
+    "/connections/{connectionId}": {
+      "schema": "PatientConnection",
+      "description": "환자-물리치료사 연결 관계 컬렉션 (키: patientId_therapistId)"
+    },
+    "/workoutLogs/{logId}": {
+      "schema": "WorkoutLog",
+      "description": "환자 재활운동 수행 기록 컬렉션"
+    },
+    "/feedbacks/{feedbackId}": {
+      "schema": "ClinicalFeedback",
+      "description": "물리치료사 임상 피드백 컬렉션"
+    },
+    "/prescriptions/{patientId}": {
+      "schema": "PrescribedProgram",
+      "description": "환자별 처방 운동 프로그램 컬렉션"
+    }
+  }
+}

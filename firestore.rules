@@ -1,0 +1,387 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // 0. Global Default Deny (기본 전체 차단)
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Helper Functions (공통 보안 및 권한 검증 헬퍼)
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. 신뢰된 물리치료사 자격 검증 (Custom Claims 또는 verifiedTherapists 등록)
+    // - 클레임이 누락된 일반 사용자 토큰에서도 안전하게 평가되도록 token.get() 안전 접근 사용
+    // - Firebase Auth Custom Claims (role == 'therapist' 또는 therapist == true)
+    // - 서버/Admin 전용 화이트리스트 (/verifiedTherapists/{uid}) 문서 존재 검증
+    // -------------------------------------------------------------------------
+    function isTrustedTherapist() {
+      return isSignedIn() && (
+        request.auth.token.get('role', '') == 'therapist' ||
+        request.auth.token.get('therapist', false) == true ||
+        exists(/databases/$(database)/documents/verifiedTherapists/$(request.auth.uid))
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. 사용자 역할 검증 헬퍼 (users 컬렉션의 실제 등록된 role 확인)
+    // - connections 생성 시 상대방의 실존 및 환자/치료사 역할 일치 여부 확인용
+    // -------------------------------------------------------------------------
+    function getUserRole(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.get('role', '');
+    }
+
+    function isValidUserWithRole(userId, expectedRole) {
+      return isValidId(userId) &&
+        exists(/databases/$(database)/documents/users/$(userId)) &&
+        getUserRole(userId) == expectedRole;
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. 검증된 담당 물리치료사 연결 관계 확인
+    // - connections 컬렉션의 실제 승인된 연결 문서(patientId_therapistId, status == 'connected')를 직접 확인
+    // -------------------------------------------------------------------------
+    function isConnectedTherapistForPatient(patientId) {
+      return isTrustedTherapist() &&
+        exists(/databases/$(database)/documents/connections/$(patientId + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/connections/$(patientId + '_' + request.auth.uid)).data.status == 'connected';
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. 환자가 특정 치료사와 연결되어 있는지 확인
+    // -------------------------------------------------------------------------
+    function isPatientConnectedToTherapist(therapistId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/connections/$(request.auth.uid + '_' + therapistId)) &&
+        get(/databases/$(database)/documents/connections/$(request.auth.uid + '_' + therapistId)).data.status == 'connected';
+    }
+
+    // =========================================================================
+    // 1. Verified Therapists Collection (검증된 물리치료사 화이트리스트)
+    // - 일반 사용자의 전체 목록 조회(list) 전면 차단 (allow list: if false)
+    // - 치료사 본인만 자신의 인증 여부 단일 get 조회 가능
+    // - 클라이언트 쓰기 전면 차단 (Firebase Admin SDK / Console에서만 등록 가능)
+    // =========================================================================
+    match /verifiedTherapists/{therapistId} {
+      allow get: if isSignedIn() && request.auth.uid == therapistId;
+      allow list: if false; // 전체 목록 스크래핑 원천 차단
+      allow write: if false; // 클라이언트 위조 차단
+    }
+
+    // =========================================================================
+    // 2. Public Therapists Collection (공개 치료사 디렉터리)
+    // - create와 update를 분리하여 런타임 오류 방지
+    // - 클라이언트의 임의 isVerified 위조 차단 (서버 관리 검증 상태와 혼동 방지)
+    // - update 시 therapistId, createdAt, isVerified 수정 불가
+    // =========================================================================
+    match /publicTherapists/{therapistId} {
+      // 로그인한 모든 사용자는 환자-치료사 연결 목적의 공개 디렉터리 조회 및 코드 검색 가능
+      allow get, list: if isSignedIn();
+
+      // 생성:
+      // - 신규 가입한 치료사가 자신의 공개 프로필 등록
+      // - resource.data(existing())를 참조하지 않고 incoming()만 검증하여 에러 방지
+      // - isVerified는 오직 false로만 생성 가능 (서버 권한과 클라이언트 혼동 차단)
+      allow create: if isSignedIn() && 
+        request.auth.uid == therapistId &&
+        isValidId(therapistId) &&
+        incoming().therapistId == therapistId &&
+        incoming().keys().hasOnly([
+          'therapistId', 'name', 'clinic', 'licenseCode', 'connectionCode', 'photoUrl', 'isVerified', 'createdAt', 'updatedAt'
+        ]) &&
+        (!('isVerified' in incoming()) || incoming().isVerified == false || isTrustedTherapist());
+
+      // 수정:
+      // - therapistId, createdAt, isVerified는 수정 불가 (서버 관리 자격 상태 보호)
+      // - 오직 허용된 공개 필드만 수정 허용
+      allow update: if isSignedIn() && 
+        request.auth.uid == therapistId &&
+        incoming().therapistId == existing().therapistId &&
+        (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'clinic', 'licenseCode', 'connectionCode', 'photoUrl', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 3. Users Collection (사용자 비공개 프로필)
+    // - 치료사 프로필 전체 공개 방지: 본인 및 실제 연결된 상대방만 단일 get 가능
+    // - 목록 쿼리(list) 전면 차단 (allow list: if false) -> 환자 및 사용자 전체 스크래핑 차단
+    // - role, uid, therapistId, connectionStatus, isVerified 임의 조작 원천 차단
+    // =========================================================================
+    match /users/{userId} {
+      // 단일 조회(get): 
+      // 1) 본인
+      // 2) 실제 연결된 담당 물리치료사 (환자의 차트 열람)
+      // 3) 실제 연결된 환자 (담당 치료사 상세 정보 열람)
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId || 
+        isConnectedTherapistForPatient(userId) ||
+        isPatientConnectedToTherapist(userId)
+      );
+
+      // 목록 쿼리(list) 전면 차단 (치료사는 connections 컬렉션 조회 후 개별 getDoc으로 환자 차트 열람)
+      allow list: if false;
+
+      // 최초 프로필 생성: 
+      // - 환자는 role: 'patient'로 생성
+      // - 치료사는 role: 'therapist'로 생성하되 isVerified는 반드시 false(미인증)로만 생성 가능
+      allow create: if isSignedIn() && 
+        request.auth.uid == userId && 
+        isValidId(userId) &&
+        incoming().uid == userId &&
+        (
+          incoming().role == 'patient' || 
+          (incoming().role == 'therapist' && incoming().isVerified == false)
+        ) &&
+        incoming().name is string && incoming().name.size() <= 50;
+
+      // 프로필 수정:
+      // - 본인 수정: role, uid, therapistId, connectionStatus, isVerified 수정 금지
+      // - 담당 치료사 수정: 배정 프로그램, 임상 메모, 피드백만 수정 허용
+      allow update: if isSignedIn() && (
+        (
+          request.auth.uid == userId && 
+          incoming().uid == existing().uid && 
+          incoming().role == existing().role &&
+          (!('therapistId' in existing()) || incoming().therapistId == existing().therapistId) &&
+          (!('connectionStatus' in existing()) || incoming().connectionStatus == existing().connectionStatus) &&
+          (!('isVerified' in existing()) || incoming().isVerified == existing().isVerified) &&
+          (!('therapistVerification' in existing()) || incoming().therapistVerification == existing().therapistVerification) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'email', 'age', 'gender', 'diagnosis', 'targetGoal', 
+            'clinic', 'licenseCode', 'updatedAt', 'profileImage'
+          ])
+        ) ||
+        (
+          isTrustedTherapist() && 
+          isConnectedTherapistForPatient(userId) &&
+          incoming().uid == existing().uid && 
+          incoming().role == existing().role &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'diagnosis',
+            'assignedProgram', 
+            'therapistNotes', 
+            'feedbacks',
+            'updatedAt'
+          ])
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 4. Patient-Therapist Connections Collection (연결 관계)
+    // - 표준 문서 키: `${patientId}_${therapistId}`
+    // - 생성 시 환자/치료사 실제 users 문서 존재 및 역할 일치 검증 (Requirement 2)
+    // - patientId, therapistId, connectionId, createdAt 불변(Immutable)
+    // - 승인, 거절, 해제, 재연결 각 단계별 허용 필드만 수정 가능하도록 엄격히 검증
+    // =========================================================================
+    match /connections/{connectionId} {
+      // 당사자(환자 또는 치료사)만 조회 가능
+      // 클라이언트 쿼리 필수 조건: where('patientId', '==', auth.uid) 또는 where('therapistId', '==', auth.uid)
+      allow get, list: if isSignedIn() && 
+        (resource.data.patientId == request.auth.uid || resource.data.therapistId == request.auth.uid);
+
+      // 연결 요청 생성 (Requirement 2 검증):
+      // - 초기 상태는 반드시 'pending'
+      // - 문서 ID는 반드시 `${patientId}_${therapistId}`
+      // - patientId는 users 컬렉션에 실재하며 role == 'patient'여야 함
+      // - therapistId는 users 컬렉션에 실재하며 role == 'therapist'여야 함
+      // - 요청 주체(requestedBy) 검증: 환자가 요청 시 patientId == auth.uid, 치료사가 요청 시 therapistId == auth.uid & isTrustedTherapist()
+      allow create: if isSignedIn() && 
+        isValidId(connectionId) &&
+        connectionId == (incoming().patientId + '_' + incoming().therapistId) &&
+        incoming().status == 'pending' &&
+        incoming().requestedBy in ['patient', 'therapist'] &&
+        incoming().keys().hasOnly([
+          'connectionId', 'patientId', 'patientName', 'therapistId', 'therapistName',
+          'status', 'requestedBy', 'requestType', 'inviteCode', 'createdAt', 'updatedAt', 'notes'
+        ]) &&
+        isValidUserWithRole(incoming().patientId, 'patient') &&
+        isValidUserWithRole(incoming().therapistId, 'therapist') &&
+        (
+          (incoming().requestedBy == 'patient' && incoming().patientId == request.auth.uid) ||
+          (incoming().requestedBy == 'therapist' && incoming().therapistId == request.auth.uid && isTrustedTherapist())
+        );
+
+      // 연결 상태 변경:
+      // - patientId, therapistId, connectionId, createdAt 변경 불변(Immutable) 강제
+      // - 각 작업별 허용 필드(affectedKeys)만 엄격히 제한
+      allow update: if isSignedIn() && 
+        existing().patientId == incoming().patientId &&
+        existing().therapistId == incoming().therapistId &&
+        (!('connectionId' in existing()) || existing().connectionId == incoming().connectionId) &&
+        (!('createdAt' in existing()) || existing().createdAt == incoming().createdAt) &&
+        (
+          // 1) 승인 (pending -> connected)
+          // - 허용 수정 필드: status, connectedAt, updatedAt
+          // - 반드시 요청을 '받은' 상대방만 승인 가능
+          // - requestedBy 불변 유지
+          (
+            existing().status == 'pending' &&
+            incoming().status == 'connected' &&
+            incoming().requestedBy == existing().requestedBy &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'connectedAt', 'updatedAt']) &&
+            (
+              // 환자가 요청한 경우: 오직 신뢰된 치료사만 수락 가능
+              (existing().requestedBy == 'patient' && request.auth.uid == existing().therapistId && isTrustedTherapist()) ||
+              // 치료사가 초대한 경우: 오직 환자 본인만 수락 가능
+              (existing().requestedBy == 'therapist' && request.auth.uid == existing().patientId)
+            )
+          ) ||
+          // 2) 거절 (pending -> rejected)
+          // - 허용 수정 필드: status, rejectedAt, respondedAt, updatedAt, notes, rejectionReason
+          // - 요청을 받은 상대방만 거절 가능
+          // - requestedBy 불변 유지
+          (
+            existing().status == 'pending' &&
+            incoming().status == 'rejected' &&
+            incoming().requestedBy == existing().requestedBy &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'rejectedAt', 'respondedAt', 'updatedAt', 'notes', 'rejectionReason']) &&
+            (
+              (existing().requestedBy == 'patient' && request.auth.uid == existing().therapistId) ||
+              (existing().requestedBy == 'therapist' && request.auth.uid == existing().patientId)
+            )
+          ) ||
+          // 3) 연결 해제 (connected -> disconnected)
+          // - 허용 수정 필드: status, disconnectedAt, updatedAt, notes
+          // - 환자 또는 치료사 당사자 누구나 해제 가능
+          // - requestedBy 불변 유지
+          (
+            existing().status == 'connected' &&
+            incoming().status == 'disconnected' &&
+            incoming().requestedBy == existing().requestedBy &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'disconnectedAt', 'updatedAt', 'notes']) &&
+            (request.auth.uid == existing().patientId || request.auth.uid == existing().therapistId)
+          ) ||
+          // 4) 재연결 요청 (disconnected/rejected -> pending)
+          // - 허용 수정 필드: status, requestedBy, updatedAt, notes, requestType, inviteCode
+          // - 새로운 요청 주체에 따른 권한 검증
+          (
+            (existing().status == 'disconnected' || existing().status == 'rejected') &&
+            incoming().status == 'pending' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'requestedBy', 'updatedAt', 'notes', 'requestType', 'inviteCode']) &&
+            incoming().requestedBy in ['patient', 'therapist'] &&
+            (
+              (incoming().requestedBy == 'patient' && request.auth.uid == existing().patientId) ||
+              (incoming().requestedBy == 'therapist' && request.auth.uid == existing().therapistId && isTrustedTherapist())
+            )
+          )
+        );
+
+      allow delete: if false; // 감사 추적을 위해 삭제 차단
+    }
+
+    // =========================================================================
+    // 5. Workout Logs Collection (환자 재활운동 수행 기록)
+    // - 수정 시 patientId 변경 불가 (Immutable)
+    // - 실제 승인된 연결 관계의 치료사만 조회 가능
+    // =========================================================================
+    match /workoutLogs/{logId} {
+      allow get, list: if isSignedIn() && (
+        resource.data.patientId == request.auth.uid || 
+        isConnectedTherapistForPatient(resource.data.patientId)
+      );
+
+      // 환자 본인만 작성 가능 (통증 0~10 유효성 검증)
+      allow create: if isSignedIn() && 
+        isValidId(logId) &&
+        incoming().patientId == request.auth.uid &&
+        incoming().painLevel >= 0 && incoming().painLevel <= 10;
+
+      // 수정: 환자 본인만 가능하며, patientId는 기존 값과 반드시 일치해야 함
+      allow update: if isSignedIn() && 
+        existing().patientId == request.auth.uid &&
+        incoming().patientId == existing().patientId &&
+        (!('id' in existing()) || incoming().id == existing().id) &&
+        (!('exerciseId' in existing()) || incoming().exerciseId == existing().exerciseId);
+
+      allow delete: if isSignedIn() && existing().patientId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // 6. Clinical Feedbacks Collection (물리치료사 임상 소견)
+    // - 미검증 치료사는 작성 불가 (isTrustedTherapist() 필수)
+    // - 수정 시 patientId와 therapistId 변경 불가 (Immutable)
+    // =========================================================================
+    match /feedbacks/{feedbackId} {
+      allow get, list: if isSignedIn() && (
+        resource.data.patientId == request.auth.uid || 
+        (isTrustedTherapist() && isConnectedTherapistForPatient(resource.data.patientId))
+      );
+
+      // 피드백 작성: 신뢰된 물리치료사이면서 실제 승인된 연결 관계일 때만 허용
+      allow create: if isTrustedTherapist() && 
+        isValidId(feedbackId) &&
+        incoming().therapistId == request.auth.uid &&
+        isConnectedTherapistForPatient(incoming().patientId);
+
+      // 수정: 작성 치료사 본인만 가능하며, patientId와 therapistId는 절대 변경 불가
+      allow update: if isTrustedTherapist() && 
+        existing().therapistId == request.auth.uid &&
+        incoming().therapistId == existing().therapistId &&
+        incoming().patientId == existing().patientId &&
+        (!('id' in existing()) || incoming().id == existing().id) &&
+        isConnectedTherapistForPatient(existing().patientId);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 7. Prescriptions Collection (환자별 처방 운동 프로그램)
+    // - 미검증 치료사는 처방 등록 불가 (isTrustedTherapist() 필수)
+    // - 수정 시 patientId 및 therapistId가 기존 값과 일치해야 함 (Immutable)
+    // =========================================================================
+    match /prescriptions/{patientId} {
+      allow get, list: if isSignedIn() && 
+        (request.auth.uid == patientId || isConnectedTherapistForPatient(patientId));
+
+      // 처방 등록: 신뢰된 치료사이면서 실제 승인된 담당 치료사만 가능
+      allow create: if isTrustedTherapist() && 
+        incoming().therapistId == request.auth.uid &&
+        incoming().patientId == patientId &&
+        isConnectedTherapistForPatient(patientId);
+
+      // 처방 수정: patientId와 therapistId가 기존 값과 일치해야 함
+      allow update: if isTrustedTherapist() && 
+        existing().therapistId == request.auth.uid &&
+        incoming().therapistId == existing().therapistId &&
+        incoming().patientId == existing().patientId &&
+        incoming().patientId == patientId &&
+        isConnectedTherapistForPatient(patientId);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // 8. System Health Document (백엔드 연결 활성 상태 핑 테스트)
+    // =========================================================================
+    match /system_health/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
