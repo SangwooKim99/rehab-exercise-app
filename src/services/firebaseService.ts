@@ -34,6 +34,7 @@ import {
 import { 
   getFirebaseAuth, 
   getFirebaseFirestore, 
+  waitForFirebaseAuthUid,
   handleFirestoreError, 
   OperationType 
 } from './firebase';
@@ -276,7 +277,9 @@ export const FirebaseService = {
         connectionCode,
         clinic: params.clinic,
         licenseCode: params.licenseCode,
-        registeredAt: nowStr
+        registeredAt: nowStr,
+        authProvider: 'firebase',
+        isDemoAccount: false
       };
 
       // 세션 저장 및 상태 이벤트 발송
@@ -344,7 +347,9 @@ export const FirebaseService = {
           connectedTherapistName: data.connectedTherapistName,
           clinic: data.clinic,
           licenseCode: data.licenseCode,
-          registeredAt: data.createdAt
+          registeredAt: data.createdAt,
+          authProvider: 'firebase',
+          isDemoAccount: false
         };
       } else {
         // 프로필이 없는 경우 기본 프로필 생성
@@ -370,7 +375,9 @@ export const FirebaseService = {
           therapistId: fallbackRole === 'therapist' ? uid : undefined,
           accountStatus: 'active',
           approvalStatus: 'approved',
-          registeredAt: nowStr
+          registeredAt: nowStr,
+          authProvider: 'firebase',
+          isDemoAccount: false
         };
       }
 
@@ -774,15 +781,97 @@ export const FirebaseService = {
   },
 
   /**
+   * 물리치료사와 환자 UID로 실제 Firestore 연결 문서 조회
+   * 1. 표준 canonicalId(`${patientId}_${therapistId}`)로 getDoc 시도
+   * 2. 없거나 다르면 where('therapistId', '==', therapistId) 쿼리로 탐색하여 실제 doc.id 획득
+   */
+  async findConnectionDocByTherapistAndPatient(
+    therapistId: string,
+    patientId: string
+  ): Promise<{ docId: string; connection: PatientTherapistConnection } | null> {
+    const db = getFirebaseFirestore();
+    if (!db || !therapistId || !patientId) return null;
+
+    // 1. canonical ID 우선 직접 getDoc 시도
+    const canonicalId = `${patientId}_${therapistId}`;
+    try {
+      const snap = await getDoc(doc(db, 'connections', canonicalId));
+      if (snap.exists()) {
+        const data = snap.data() as PatientTherapistConnection;
+        return {
+          docId: snap.id,
+          connection: {
+            ...data,
+            connectionId: snap.id
+          }
+        };
+      }
+    } catch (e: any) {
+      if (e?.code === 'permission-denied') {
+        throw e;
+      }
+      console.warn('Canonical connection getDoc check skipped:', e);
+    }
+
+    // 2. 쿼리로 실제 문서 탐색 (보안 규칙: where('therapistId', '==', auth.uid) 만족)
+    try {
+      const q = query(
+        collection(db, 'connections'),
+        where('therapistId', '==', therapistId),
+        where('patientId', '==', patientId)
+      );
+      const querySnap = await getDocs(q);
+      if (!querySnap.empty) {
+        const firstDoc = querySnap.docs[0];
+        return {
+          docId: firstDoc.id,
+          connection: {
+            ...(firstDoc.data() as PatientTherapistConnection),
+            connectionId: firstDoc.id
+          }
+        };
+      }
+    } catch (err: any) {
+      if (err?.code === 'permission-denied') {
+        throw err;
+      }
+      console.warn('Query connection by therapist and patient error:', err);
+    }
+
+    return null;
+  },
+
+  /**
+   * users/{uid} 문서 조회 (환자 또는 치료사 프로필)
+   */
+  async getUserProfile(uid: string): Promise<Record<string, any> | null> {
+    const db = getFirebaseFirestore();
+    if (!db || !uid) return null;
+    try {
+      const snap = await getDoc(doc(db, 'users', uid));
+      if (snap.exists()) {
+        return snap.data();
+      }
+      return null;
+    } catch (err: any) {
+      console.warn(`getUserProfile(${uid}) error:`, err?.message || err);
+      return null;
+    }
+  },
+
+  /**
    * 환자의 connections 컬렉션 목록 조회
+   * - Firestore 읽기 실패를 정상적인 빈 목록([])으로 오인하지 않도록 예외를 상위로 전달
    */
   async getConnectionsForPatient(patientId: string): Promise<PatientTherapistConnection[]> {
     const db = getFirebaseFirestore();
-    if (!db || !patientId) return [];
+    if (!db || !patientId) {
+      throw new Error('Firestore 인스턴스 또는 환자 UID가 유효하지 않습니다.');
+    }
 
-    const auth = getFirebaseAuth();
-    if (auth?.currentUser && auth.currentUser.uid !== patientId) {
-      return [];
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid || authUid !== patientId) {
+      throw new Error(`인증된 환자 UID(${authUid || '없음'})와 조회 대상 환자 UID(${patientId})가 일치하지 않습니다.`);
     }
 
     try {
@@ -801,21 +890,25 @@ export const FirebaseService = {
       });
       return conns.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     } catch (err) {
-      console.warn('getConnectionsForPatient error:', err);
-      return [];
+      console.error('getConnectionsForPatient error:', err);
+      throw err;
     }
   },
 
   /**
    * 물리치료사의 connections 컬렉션 목록 조회 (pending 및 connected 전체)
+   * - 실제 인증된 치료사 계정(auth.currentUser.uid) 확인 후 조회
+   * - Firestore 읽기 실패 시 정상적인 빈 목록([])으로 오인하지 않도록 예외를 상위로 전달
    */
   async getConnectionsForTherapist(therapistId: string): Promise<PatientTherapistConnection[]> {
     const db = getFirebaseFirestore();
-    if (!db || !therapistId) return [];
+    if (!db || !therapistId) {
+      throw new Error('Firestore 인스턴스 또는 물리치료사 UID가 유효하지 않습니다.');
+    }
 
-    const auth = getFirebaseAuth();
-    if (auth?.currentUser && auth.currentUser.uid !== therapistId) {
-      return [];
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid || authUid !== therapistId) {
+      throw new Error(`인증된 물리치료사 UID(${authUid || '없음'})와 조회 대상 치료사 UID(${therapistId})가 일치하지 않습니다.`);
     }
 
     try {
@@ -834,8 +927,8 @@ export const FirebaseService = {
       });
       return conns.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     } catch (err) {
-      console.warn('getConnectionsForTherapist error:', err);
-      return [];
+      console.error('getConnectionsForTherapist error:', err);
+      throw err;
     }
   },
 
@@ -958,11 +1051,13 @@ export const FirebaseService = {
    */
   async getConnectedPatientsForTherapist(therapistId: string): Promise<Patient[]> {
     const db = getFirebaseFirestore();
-    if (!db || !therapistId) return [];
+    if (!db || !therapistId) {
+      throw new Error('Firestore 인스턴스 또는 물리치료사 UID가 유효하지 않습니다.');
+    }
 
-    const auth = getFirebaseAuth();
-    if (auth?.currentUser && auth.currentUser.uid !== therapistId) {
-      return [];
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid || authUid !== therapistId) {
+      throw new Error(`인증된 물리치료사 UID(${authUid || '없음'})와 조회 대상 치료사 UID(${therapistId})가 일치하지 않습니다.`);
     }
 
     try {
@@ -1014,8 +1109,8 @@ export const FirebaseService = {
       const results = await Promise.all(patientPromises);
       return results.filter((p): p is Patient => p !== null);
     } catch (err) {
-      console.warn('getConnectedPatientsForTherapist error:', err);
-      return [];
+      console.error('getConnectedPatientsForTherapist error:', err);
+      throw err;
     }
   },
 

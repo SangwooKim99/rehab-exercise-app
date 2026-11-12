@@ -12,6 +12,8 @@ import { StorageService } from './storageService';
 import { FirebaseService } from './firebaseService';
 import { isFirebaseConfigured } from '../config/firebaseConfig';
 
+import { getFirebaseAuth } from './firebase';
+
 const ACCOUNTS_STORAGE_KEY = 'rehab_accounts_v1';
 const SESSION_KEY = 'rehab_session_user_v1';
 const AUTH_EVENT_NAME = 'rehab_auth_state_changed';
@@ -26,7 +28,9 @@ export const INITIAL_DEMO_ACCOUNTS: UserAccount[] = [
     role: 'super_admin',
     accountStatus: 'active',
     approvalStatus: 'approved',
-    registeredAt: '2026-10-15T09:00:00.000Z'
+    registeredAt: '2026-10-15T09:00:00.000Z',
+    authProvider: 'demo',
+    isDemoAccount: true
   },
   {
     id: 'acc-therapist-01',
@@ -41,7 +45,9 @@ export const INITIAL_DEMO_ACCOUNTS: UserAccount[] = [
     licenseCode: 'PT-2026-34821',
     clinic: '바른재활의학과의원',
     approvalStatus: 'approved',
-    registeredAt: '2026-10-20T09:00:00.000Z'
+    registeredAt: '2026-10-20T09:00:00.000Z',
+    authProvider: 'demo',
+    isDemoAccount: true
   },
   {
     id: 'acc-patient-01',
@@ -54,7 +60,9 @@ export const INITIAL_DEMO_ACCOUNTS: UserAccount[] = [
     connectedTherapistId: 'acc-therapist-01',
     connectedTherapistName: '박건우 PT',
     approvalStatus: 'approved',
-    registeredAt: '2026-10-25T10:00:00.000Z'
+    registeredAt: '2026-10-25T10:00:00.000Z',
+    authProvider: 'demo',
+    isDemoAccount: true
   },
   {
     id: 'acc-patient-02',
@@ -67,7 +75,9 @@ export const INITIAL_DEMO_ACCOUNTS: UserAccount[] = [
     connectedTherapistId: 'acc-therapist-01',
     connectedTherapistName: '박건우 PT',
     approvalStatus: 'approved',
-    registeredAt: '2026-10-28T14:30:00.000Z'
+    registeredAt: '2026-10-28T14:30:00.000Z',
+    authProvider: 'demo',
+    isDemoAccount: true
   },
   {
     id: 'acc-patient-03',
@@ -80,9 +90,14 @@ export const INITIAL_DEMO_ACCOUNTS: UserAccount[] = [
     connectedTherapistId: 'acc-therapist-01',
     connectedTherapistName: '박건우 PT',
     approvalStatus: 'approved',
-    registeredAt: '2026-10-29T11:20:00.000Z'
+    registeredAt: '2026-10-29T11:20:00.000Z',
+    authProvider: 'demo',
+    isDemoAccount: true
   }
 ];
+
+const PURE_DEMO_ACCOUNT_IDS = new Set(INITIAL_DEMO_ACCOUNTS.map((a) => a.id));
+const PURE_DEMO_USERNAMES = new Set(INITIAL_DEMO_ACCOUNTS.map((a) => a.username.toLowerCase()));
 
 function emitAuthChange() {
   if (typeof window !== 'undefined') {
@@ -143,7 +158,7 @@ export const AuthService = {
         }
       });
 
-      // 2. 가입 승인 대기 제거 마이그레이션: 모든 pending 계정을 active 상태로 승격
+      // 2. 가입 승인 대기 제거 마이그레이션 및 순수 데모 계정 / Firebase 계정 구분 정규화
       parsed.forEach((acc) => {
         if (!acc.accountStatus) {
           acc.accountStatus = 'active';
@@ -152,6 +167,27 @@ export const AuthService = {
         if (acc.approvalStatus !== 'approved') {
           acc.approvalStatus = 'approved';
           updated = true;
+        }
+        const isPreconfiguredDemo =
+          PURE_DEMO_ACCOUNT_IDS.has(acc.id) &&
+          PURE_DEMO_USERNAMES.has((acc.username || '').toLowerCase());
+
+        if (isPreconfiguredDemo) {
+          if (acc.authProvider !== 'demo' || acc.isDemoAccount !== true) {
+            acc.authProvider = 'demo';
+            acc.isDemoAccount = true;
+            updated = true;
+          }
+        } else {
+          // INITIAL_DEMO_ACCOUNTS에 정의되지 않은 계정은 데모 계정이 아님을 명시
+          if (acc.isDemoAccount !== false) {
+            acc.isDemoAccount = false;
+            updated = true;
+          }
+          if (!acc.authProvider && isFirebaseConfigured()) {
+            acc.authProvider = 'firebase';
+            updated = true;
+          }
         }
         // 물리치료사 고유 연결 코드 부여
         if (acc.role === 'therapist' && !acc.connectionCode) {
@@ -172,6 +208,27 @@ export const AuthService = {
       localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(INITIAL_DEMO_ACCOUNTS));
       return INITIAL_DEMO_ACCOUNTS;
     }
+  },
+
+  /**
+   * 명시적으로 정의된 순수 시연용 데모 계정(INITIAL_DEMO_ACCOUNTS)인지 판별합니다.
+   * - 단순 ID 접두사(startsWith)에 의존하지 않고, INITIAL_DEMO_ACCOUNTS 정의 목록 및 authProvider를 함께 검증합니다.
+   */
+  isPureDemoAccount(accountOrUser?: {
+    id?: string;
+    username?: string;
+    authProvider?: 'firebase' | 'demo';
+    isDemoAccount?: boolean;
+  } | null): boolean {
+    if (!accountOrUser) return false;
+    if (accountOrUser.authProvider === 'firebase' || accountOrUser.isDemoAccount === false) {
+      return false;
+    }
+    const idMatch = accountOrUser.id ? PURE_DEMO_ACCOUNT_IDS.has(accountOrUser.id) : false;
+    const usernameMatch = accountOrUser.username
+      ? PURE_DEMO_USERNAMES.has(accountOrUser.username.trim().toLowerCase())
+      : false;
+    return idMatch && usernameMatch;
   },
 
   /**
@@ -236,7 +293,7 @@ export const AuthService = {
         const newAcc: UserAccount = {
           id: fbResult.user.id,
           username: input.username,
-          passwordHash: input.password,
+          passwordHash: '',
           name: input.name,
           role: input.role,
           patientId: fbResult.user.patientId,
@@ -245,7 +302,9 @@ export const AuthService = {
           approvalStatus: 'approved',
           connectionCode: fbResult.user.connectionCode,
           clinic: fbResult.user.clinic,
-          registeredAt: new Date().toISOString()
+          registeredAt: new Date().toISOString(),
+          authProvider: 'firebase',
+          isDemoAccount: false
         };
         if (existingIdx >= 0) {
           accounts[existingIdx] = newAcc;
@@ -438,39 +497,62 @@ export const AuthService = {
       };
     }
 
-    // 1. 기존 데모 계정 우선 확인 (patient01, therapist01 등 발표/시연용 빠른 로그인 호환)
+    // 1. 명시적으로 정의된 순수 시연용 데모 계정(INITIAL_DEMO_ACCOUNTS: patient01~03, therapist01, admin01)만 로컬 로그인 허용
+    // - localStorage['rehab_accounts_v1']에 캐시된 실제 Firebase 계정은 절대로 로컬 로그인으로 우회하지 않음
     const accounts = this.getAccounts();
-    const matchedAccount = accounts.find(
-      (acc) => acc.username.toLowerCase() === trimmedInput.toLowerCase() && acc.passwordHash === trimmedPassword
+    const matchedDemoAccount = accounts.find(
+      (acc) =>
+        this.isPureDemoAccount(acc) &&
+        acc.username.toLowerCase() === trimmedInput.toLowerCase() &&
+        acc.passwordHash === trimmedPassword
     );
-    if (matchedAccount) {
+    if (matchedDemoAccount) {
+      if (isFirebaseConfigured()) {
+        await FirebaseService.logout().catch(() => {});
+      }
       return this.login(trimmedInput, trimmedPassword);
     }
 
-    // 2. Firebase가 설정된 경우 Firebase Authentication으로 로그인
+    // 2. Firebase가 설정된 경우 반드시 Firebase Authentication(signInWithEmailAndPassword)으로 로그인 수행
     if (isFirebaseConfigured()) {
       const email = trimmedInput.includes('@') ? trimmedInput : `${trimmedInput}@rehab.local`;
       const fbResult = await FirebaseService.login(email, trimmedPassword);
       if (fbResult.success && fbResult.user) {
-        // 로컬 데모 캐시에도 동기화
-        const existingIdx = accounts.findIndex((a) => a.id === fbResult.user!.id);
-        if (existingIdx === -1) {
-          accounts.push({
-            id: fbResult.user.id,
-            username: fbResult.user.username,
-            passwordHash: trimmedPassword,
-            name: fbResult.user.name,
-            role: fbResult.user.role,
-            patientId: fbResult.user.patientId,
-            therapistId: fbResult.user.therapistId,
-            accountStatus: 'active',
-            approvalStatus: 'approved',
-            connectionCode: fbResult.user.connectionCode,
-            clinic: fbResult.user.clinic,
-            registeredAt: new Date().toISOString()
-          });
-          localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+        // 로그인 성공 후 실제 Firebase Authentication UID와 앱 사용자 ID 일치 여부 검증
+        const currentAuthUid = getFirebaseAuth()?.currentUser?.uid;
+        if (!currentAuthUid || currentAuthUid !== fbResult.user.id) {
+          return {
+            success: false,
+            errorMessage: 'Firebase 인증 세션 UID와 사용자 ID가 일치하지 않습니다. 다시 로그인해 주세요.'
+          };
         }
+
+        // 로컬 계정 메타데이터 동기화 (authProvider: 'firebase', isDemoAccount: false 명시)
+        const syncedAccount: UserAccount = {
+          id: fbResult.user.id,
+          username: fbResult.user.username,
+          passwordHash: '',
+          name: fbResult.user.name,
+          role: fbResult.user.role,
+          patientId: fbResult.user.patientId,
+          therapistId: fbResult.user.therapistId,
+          accountStatus: 'active',
+          approvalStatus: 'approved',
+          connectionCode: fbResult.user.connectionCode,
+          clinic: fbResult.user.clinic,
+          registeredAt: fbResult.user.registeredAt || new Date().toISOString(),
+          authProvider: 'firebase',
+          isDemoAccount: false
+        };
+        const existingIdx = accounts.findIndex(
+          (a) => a.id === fbResult.user!.id || (!this.isPureDemoAccount(a) && a.username.toLowerCase() === fbResult.user!.username.toLowerCase())
+        );
+        if (existingIdx >= 0) {
+          accounts[existingIdx] = syncedAccount;
+        } else {
+          accounts.push(syncedAccount);
+        }
+        localStorage.setItem(ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
 
         // 환자인 경우 로컬 환자 차트 동기화
         if (fbResult.user.role === 'patient') {
@@ -493,6 +575,7 @@ export const AuthService = {
 
         return fbResult;
       } else {
+        // 실제 Firebase 계정의 로그인 실패 시 로컬 로그인으로 우회하지 않고 즉시 실패 반환
         return fbResult;
       }
     }
@@ -501,7 +584,7 @@ export const AuthService = {
   },
 
   /**
-   * 로그인 처리
+   * 로그인 처리 (순수 데모 계정 또는 Firebase 미설정 오프라인 모드 전용)
    */
   login(usernameInput: string, passwordInput: string): { success: boolean; user?: AuthUser; errorMessage?: string } {
     const trimmedUsername = usernameInput.trim();
@@ -516,7 +599,10 @@ export const AuthService = {
 
     const accounts = this.getAccounts();
     const matchedAccount = accounts.find(
-      (acc) => acc.username.toLowerCase() === trimmedUsername.toLowerCase() && acc.passwordHash === trimmedPassword
+      (acc) =>
+        (!isFirebaseConfigured() || this.isPureDemoAccount(acc)) &&
+        acc.username.toLowerCase() === trimmedUsername.toLowerCase() &&
+        acc.passwordHash === trimmedPassword
     );
 
     if (!matchedAccount) {
@@ -534,6 +620,7 @@ export const AuthService = {
       };
     }
 
+    const isDemo = this.isPureDemoAccount(matchedAccount);
     const sessionUser: AuthUser = {
       id: matchedAccount.id,
       username: matchedAccount.username,
@@ -548,7 +635,9 @@ export const AuthService = {
       connectedTherapistName: matchedAccount.connectedTherapistName,
       licenseCode: matchedAccount.licenseCode,
       clinic: matchedAccount.clinic,
-      registeredAt: matchedAccount.registeredAt
+      registeredAt: matchedAccount.registeredAt,
+      authProvider: isDemo ? 'demo' : matchedAccount.authProvider,
+      isDemoAccount: isDemo
     };
 
     if (typeof window !== 'undefined') {
@@ -647,6 +736,12 @@ export const AuthService = {
   logout() {
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem(SESSION_KEY);
+    }
+    // Firebase Auth 세션도 즉시 로그아웃하여 계정 전환 시 이전 사용자 UID가 남아있지 않도록 보장
+    if (isFirebaseConfigured()) {
+      FirebaseService.logout().catch((err) => {
+        console.warn('Firebase logout warning on AuthService.logout:', err);
+      });
     }
     emitAuthChange();
   },

@@ -84,6 +84,25 @@ export function getFirebaseAuth(): Auth | null {
   }
 }
 
+/**
+ * Firebase Auth 초기화 완료 후 현재 인증된 사용자의 UID를 반환합니다.
+ * - Firebase SDK v10.1.0+ / v13.x의 auth.authStateReady()를 사용하여
+ *   IndexedDB 세션 복원이 완료된 이후의 정확한 currentUser.uid를 보장합니다.
+ */
+export async function waitForFirebaseAuthUid(): Promise<string | null> {
+  const auth = getFirebaseAuth();
+  if (!auth) return null;
+  try {
+    if (typeof auth.authStateReady === 'function') {
+      await auth.authStateReady();
+    }
+    return auth.currentUser?.uid || null;
+  } catch (error) {
+    console.warn('waitForFirebaseAuthUid warning:', error);
+    return auth.currentUser?.uid || null;
+  }
+}
+
 export function getFirebaseFirestore(): Firestore | null {
   if (dbInstance) return dbInstance;
   const app = getFirebaseApp();

@@ -193,6 +193,8 @@ export interface AuthUser {
   licenseCode?: string;
   clinic?: string;
   registeredAt?: string;
+  authProvider?: 'firebase' | 'demo';
+  isDemoAccount?: boolean;
 }
 
 export interface UserAccount {
@@ -212,6 +214,8 @@ export interface UserAccount {
   licenseCode?: string;
   clinic?: string;
   registeredAt: string;
+  authProvider?: 'firebase' | 'demo';
+  isDemoAccount?: boolean;
 }
 
 /**

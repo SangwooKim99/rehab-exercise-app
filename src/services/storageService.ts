@@ -25,7 +25,8 @@ import {
   INITIAL_WORKOUT_LOGS
 } from '../data/initialData';
 import { FirebaseService } from './firebaseService';
-import { getFirebaseAuth } from './firebase';
+import { getFirebaseAuth, waitForFirebaseAuthUid } from './firebase';
+import { AuthService } from './authService';
 import { isFirebaseConfigured } from '../config/firebaseConfig';
 
 const PATIENTS_KEY = 'rehab_patients_v1';
@@ -475,12 +476,19 @@ export const StorageService = {
         return;
       }
       const canonicalDocId = (c.connectionId ? c.connectionId.replace(/^req-/, '') : '') || `${c.patientId}_${c.therapistId}`;
-      const exists = requests.some(
+      const expectedReqId = `req-${canonicalDocId}`;
+      const existingReq = requests.find(
         (r) => r.patientId === c.patientId && (r.therapistId === c.therapistId || r.therapistId === c.therapistName) && r.status === 'pending'
       );
-      if (!exists) {
+      if (existingReq) {
+        if (existingReq.id !== expectedReqId || existingReq.therapistId !== c.therapistId) {
+          existingReq.id = expectedReqId;
+          existingReq.therapistId = c.therapistId;
+          changed = true;
+        }
+      } else {
         requests.unshift({
-          id: `req-${canonicalDocId}`,
+          id: expectedReqId,
           patientId: c.patientId,
           patientName: c.patientName,
           therapistId: c.therapistId,
@@ -631,7 +639,7 @@ export const StorageService = {
     }
 
     const newRequest: ConnectionRequest = {
-      id: `req-${Date.now()}`,
+      id: `req-${canonicalConnectionId}`,
       patientId,
       patientName,
       therapistId: therapistAccount.id,
@@ -687,11 +695,15 @@ export const StorageService = {
     const targetReq = reqIndex !== -1 ? requests[reqIndex] : null;
 
     const nowStr = new Date().toISOString();
-    const authUid = getFirebaseAuth()?.currentUser?.uid;
+    const isDemoTherapist = AuthService.isPureDemoAccount(therapistUser);
+    const authUid = isFirebaseConfigured() && !isDemoTherapist
+      ? await waitForFirebaseAuthUid()
+      : getFirebaseAuth()?.currentUser?.uid;
     const currentTherapistName = therapistUser?.name || '담당 물리치료사';
+    const effectiveTherapistId = therapistUser?.therapistId || therapistUser?.id || authUid;
 
-    // 1. Firebase 연동 환경인 경우: 실제 Firestore connections 문서 기반 검증
-    if (isFirebaseConfigured()) {
+    // 1. Firebase 연동 환경(순수 데모 계정이 아닌 실제 계정)인 경우: 실제 Firestore connections 문서 기반 검증
+    if (isFirebaseConfigured() && !isDemoTherapist) {
       if (!authUid) {
         return {
           success: false,
@@ -699,42 +711,93 @@ export const StorageService = {
         };
       }
 
-      // 실제 Firestore connections 문서 ID 식별
-      // 표준 규칙: connections/${patientId}_${therapistId}
-      let targetDocId = requestId.startsWith('req-') ? requestId.replace(/^req-/, '') : requestId;
-      if (!targetDocId.includes('_') && targetReq?.patientId) {
-        targetDocId = `${targetReq.patientId}_${authUid}`;
-      }
-
-      // 요구사항 A: 실제 Firestore connections 문서 조회
-      let firestoreConn: PatientTherapistConnection | null = null;
-      try {
-        firestoreConn = await FirebaseService.getConnectionDoc(targetDocId);
-      } catch (readErr: any) {
-        console.warn('getConnectionDoc direct lookup error:', readErr);
-      }
-
-      // targetDocId 조회 실패 시 환자 ID와 로그인 치료사 UID로 구성된 canonical ID로 재시도
-      if (!firestoreConn && targetReq?.patientId && targetDocId !== `${targetReq.patientId}_${authUid}`) {
-        try {
-          firestoreConn = await FirebaseService.getConnectionDoc(`${targetReq.patientId}_${authUid}`);
-          if (firestoreConn) {
-            targetDocId = `${targetReq.patientId}_${authUid}`;
-          }
-        } catch (retryErr) {
-          console.warn('getConnectionDoc canonical retry error:', retryErr);
-        }
-      }
-
-      // Firestore 문서가 없거나 읽기 권한 실패 시: 로컬 캐시로 권한 검증을 우회하지 않고 즉시 오류 반환
-      if (!firestoreConn) {
+      // 세션 불일치 감지: Firebase Auth 계정과 현재 활성 UI 치료사 세션의 UID가 다른 경우 차단
+      if (effectiveTherapistId && authUid !== effectiveTherapistId) {
         return {
           success: false,
-          message: 'Firestore에서 연결 요청 문서를 찾을 수 없거나 접근 권한이 없습니다.'
+          message: `인증 세션 불일치가 감지되었습니다. (Firebase 인증 UID: ${authUid.substring(0, 8)}..., 현재 로그인 치료사 UID: ${effectiveTherapistId.substring(0, 8)}...). 로그아웃 후 다시 로그인해 주세요.`
         };
       }
 
-      // 요구사항 A: Firestore 문서의 therapistId와 auth.currentUser.uid 비교
+      // 실제 Firestore connections 문서 ID 및 데이터 탐색
+      let targetDocId = '';
+      let firestoreConn: PatientTherapistConnection | null = null;
+      let permissionErrorCaught = false;
+
+      // 1) requestId 자체에 이미 실제 문서 ID가 포함되어 있는지 확인 (ex. req-patientUid_therapistUid)
+      const cleanReqId = requestId.startsWith('req-') ? requestId.replace(/^req-/, '') : requestId;
+      if (cleanReqId.includes('_')) {
+        try {
+          firestoreConn = await FirebaseService.getConnectionDoc(cleanReqId);
+          if (firestoreConn) {
+            targetDocId = cleanReqId;
+          }
+        } catch (err: any) {
+          if (err?.code === 'permission-denied') {
+            permissionErrorCaught = true;
+          }
+          console.warn('getConnectionDoc direct lookup error:', err);
+        }
+      }
+
+      // 2) 로컬 connections에 저장된 원격 connectionId 확인
+      if (!firestoreConn) {
+        const localConnections = this.getConnections();
+        const matchedLocalConn = localConnections.find(
+          (c) => c.connectionId === cleanReqId || (targetReq?.patientId && c.patientId === targetReq.patientId && (c.therapistId === authUid || c.therapistId === effectiveTherapistId))
+        );
+        if (matchedLocalConn?.connectionId && matchedLocalConn.connectionId !== cleanReqId) {
+          try {
+            firestoreConn = await FirebaseService.getConnectionDoc(matchedLocalConn.connectionId);
+            if (firestoreConn) {
+              targetDocId = matchedLocalConn.connectionId;
+            }
+          } catch (err: any) {
+            if (err?.code === 'permission-denied') {
+              permissionErrorCaught = true;
+            }
+          }
+        }
+      }
+
+      // 3) 환자 ID와 인증된 치료사 UID로 실제 Firestore 문서 조회 (canonical ID 및 where 쿼리 탐색)
+      const patientIdForQuery = targetReq?.patientId || (cleanReqId.includes('_') ? cleanReqId.split('_')[0] : '');
+      const therapistIdForQuery = authUid;
+
+      if (!firestoreConn && patientIdForQuery && therapistIdForQuery) {
+        try {
+          const found = await FirebaseService.findConnectionDocByTherapistAndPatient(
+            therapistIdForQuery,
+            patientIdForQuery
+          );
+          if (found) {
+            targetDocId = found.docId;
+            firestoreConn = found.connection;
+          }
+        } catch (err: any) {
+          if (err?.code === 'permission-denied') {
+            permissionErrorCaught = true;
+          }
+          console.warn('findConnectionDocByTherapistAndPatient error:', err);
+        }
+      }
+
+      // 요구사항 7: 권한 부족(permission-denied)과 문서 미존재(not_found) 명확 구분
+      if (permissionErrorCaught && !firestoreConn) {
+        return {
+          success: false,
+          message: `Firestore 접근 권한이 없습니다 (permission-denied). 로그인된 치료사 계정(UID: ${authUid.substring(0, 8)}...)이 해당 연결의 담당 치료사인지 확인해 주세요.`
+        };
+      }
+
+      if (!firestoreConn) {
+        return {
+          success: false,
+          message: 'Firestore에서 해당 연결 요청 문서를 찾을 수 없습니다 (not_found). 환자가 보낸 연결 요청이 취소되었거나 삭제되었을 수 있습니다.'
+        };
+      }
+
+      // 요구사항 6: Firestore 문서의 therapistId와 auth.currentUser.uid 비교
       if (firestoreConn.therapistId !== authUid) {
         return {
           success: false,
@@ -850,18 +913,25 @@ export const StorageService = {
         }
         localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
       } else if (accept) {
+        let remoteProfile: Record<string, any> | null = null;
+        try {
+          remoteProfile = await FirebaseService.getUserProfile(patientId);
+        } catch (e) {
+          console.warn('getUserProfile on accept deferred:', e);
+        }
         const newPatient: Patient = {
           id: patientId,
-          name: patientName,
-          age: (firestoreConn as any).age || 30,
-          gender: (firestoreConn as any).gender || '남성',
-          diagnosis: (firestoreConn as any).diagnosis || '미입력',
-          targetGoal: (firestoreConn as any).targetGoal || '재활 목표',
-          therapistNotes: (firestoreConn as any).therapistNotes || '',
-          assignedProgram: [],
+          name: remoteProfile?.name || patientName,
+          age: remoteProfile?.age || (firestoreConn as any).age || 30,
+          gender: remoteProfile?.gender || (firestoreConn as any).gender || '남성',
+          diagnosis: remoteProfile?.diagnosis || (firestoreConn as any).diagnosis || '',
+          targetGoal: remoteProfile?.targetGoal || (firestoreConn as any).targetGoal || '재활 목표',
+          therapistNotes: remoteProfile?.therapistNotes || (firestoreConn as any).therapistNotes || '',
+          assignedProgram: remoteProfile?.assignedProgram || [],
           connectionStatus: 'connected',
           therapistId: authUid,
-          therapistName: currentTherapistName
+          therapistName: currentTherapistName,
+          feedbacks: remoteProfile?.feedbacks || []
         };
         patients.unshift(newPatient);
         localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));

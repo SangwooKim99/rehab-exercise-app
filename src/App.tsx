@@ -8,7 +8,8 @@ import { AuthUser, Patient, Exercise, AssignedExercise } from './types/rehab';
 import { StorageService, subscribeToRehabStore } from './services/storageService';
 import { AuthService, subscribeToAuth } from './services/authService';
 import { FirebaseService } from './services/firebaseService';
-import { getFirebaseAuth } from './services/firebase';
+import { getFirebaseAuth, waitForFirebaseAuthUid } from './services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 // Common Components
 import { Navbar } from './components/common/Navbar';
@@ -126,47 +127,123 @@ export default function App() {
     });
   }, []);
 
+  // Synchronize Firebase Auth changes with session user
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    if (!auth) return;
+
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      const sessionUser = AuthService.getSessionUser();
+      if (fbUser) {
+        // If session was a Firebase user and mismatched, resync profile
+        if (sessionUser && !AuthService.isPureDemoAccount(sessionUser) && sessionUser.id !== fbUser.uid) {
+          console.warn('Firebase Auth user changed, resyncing session:', fbUser.uid);
+          FirebaseService.getUserProfile(fbUser.uid).then((profile) => {
+            if (profile) {
+              const updatedSession: AuthUser = {
+                ...sessionUser,
+                id: fbUser.uid,
+                name: profile.name || sessionUser.name,
+                role: profile.role || sessionUser.role,
+                patientId: profile.role === 'patient' ? fbUser.uid : undefined,
+                therapistId: profile.role === 'therapist' ? fbUser.uid : undefined,
+                authProvider: 'firebase',
+                isDemoAccount: false
+              };
+              sessionStorage.setItem('rehab_session_user_v1', JSON.stringify(updatedSession));
+              setCurrentUser(updatedSession);
+            }
+          }).catch((err) => console.warn('Resync profile error:', err));
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   // Sync patient & therapist remote data from Firestore (Requirement 4 & Connection persistence)
   useEffect(() => {
     if (!currentUser) return;
+    // 명시적으로 식별된 순수 데모 계정(patient01~03, therapist01, admin01)은 로컬 데모 데이터만 사용
+    if (AuthService.isPureDemoAccount(currentUser)) return;
 
-    // 1. Patient Sync
-    if (currentUser.role === 'patient') {
-      const authUid = getFirebaseAuth()?.currentUser?.uid;
-      // In Firebase Auth, a patient's own ID in Firestore is ALWAYS their auth UID
-      const patientId = authUid || currentUser.id;
-      // If currentUser is a local demo patient and not the currently logged in Firebase user, skip remote sync
-      if (authUid && currentUser.id !== authUid) {
+    let isCancelled = false;
+    let unsubProfile: (() => void) | null = null;
+    let unsubConnections: (() => void) | null = null;
+    let unsubTherapistConns: (() => void) | null = null;
+
+    waitForFirebaseAuthUid().then((authUid) => {
+      if (isCancelled) return;
+      if (!authUid || authUid !== currentUser.id) {
+        console.warn('Firestore sync skipped: authenticated Firebase UID does not match session user ID.', {
+          authUid,
+          sessionUserId: currentUser.id
+        });
         return;
       }
 
-      // 운동 기록 동기화
-      FirebaseService.getWorkoutLogs(patientId).then((remoteLogs) => {
-        if (remoteLogs && remoteLogs.length > 0) {
-          const localLogs = StorageService.getWorkoutLogs();
-          const existingIds = new Set(localLogs.map((l) => l.id));
-          const newRemote = remoteLogs.filter((l) => !existingIds.has(l.id));
-          if (newRemote.length > 0) {
-            localStorage.setItem('rehab_workout_logs_v1', JSON.stringify([...newRemote, ...localLogs]));
+      // 1. Patient Sync
+      if (currentUser.role === 'patient') {
+        const patientId = authUid;
+
+        // 운동 기록 동기화
+        FirebaseService.getWorkoutLogs(patientId).then((remoteLogs) => {
+          if (isCancelled) return;
+          if (remoteLogs && remoteLogs.length > 0) {
+            const localLogs = StorageService.getWorkoutLogs();
+            const existingIds = new Set(localLogs.map((l) => l.id));
+            const newRemote = remoteLogs.filter((l) => !existingIds.has(l.id));
+            if (newRemote.length > 0) {
+              localStorage.setItem('rehab_workout_logs_v1', JSON.stringify([...newRemote, ...localLogs]));
+              setTick((t) => t + 1);
+            }
+          }
+        }).catch((e) => console.warn('Sync remote logs deferred:', e));
+
+        // 처방 프로그램 직접 동기화 (prescriptions/{patientId})
+        FirebaseService.getPrescribedProgram(patientId).then((assignedProgram) => {
+          if (isCancelled) return;
+          if (assignedProgram && assignedProgram.length > 0) {
+            const localPatient = StorageService.getPatientById(patientId);
+            if (localPatient) {
+              StorageService.updatePatientInfo(patientId, { assignedProgram });
+              setTick((t) => t + 1);
+            }
+          }
+        }).catch((e) => console.warn('Sync prescription deferred:', e));
+
+        // 환자 연결 관계 초기 1회 로드 및 로컬 반영
+        FirebaseService.getConnectionsForPatient(patientId).then((remoteConns) => {
+          if (isCancelled || !remoteConns) return;
+          if (remoteConns.length > 0) {
+            StorageService.syncRemoteConnections(remoteConns);
+            const activeOrPending = remoteConns.find((c) => c.status === 'connected' || c.status === 'pending');
+            if (activeOrPending) {
+              StorageService.updatePatientInfo(patientId, {
+                connectionStatus: activeOrPending.status,
+                therapistId: activeOrPending.status === 'connected' ? activeOrPending.therapistId : undefined,
+                therapistName: activeOrPending.status === 'connected' ? activeOrPending.therapistName : undefined,
+                requestedTherapistId: activeOrPending.status === 'pending' ? activeOrPending.therapistId : undefined,
+                requestedTherapistName: activeOrPending.status === 'pending' ? activeOrPending.therapistName : undefined
+              });
+            }
             setTick((t) => t + 1);
           }
-        }
-      }).catch((e) => console.warn('Sync remote logs deferred:', e));
+        }).catch((e) => console.warn('Sync patient connections error:', e));
 
-      // 처방 프로그램 직접 동기화 (prescriptions/{patientId})
-      FirebaseService.getPrescribedProgram(patientId).then((assignedProgram) => {
-        if (assignedProgram && assignedProgram.length > 0) {
-          const localPatient = StorageService.getPatientById(patientId);
-          if (localPatient) {
-            StorageService.updatePatientInfo(patientId, { assignedProgram });
-            setTick((t) => t + 1);
+        // 실시간 환자 프로필 리스너
+        unsubProfile = FirebaseService.subscribeToPatientProfile(patientId, (remotePatient) => {
+          if (remotePatient) {
+            const localPatient = StorageService.getPatientById(patientId);
+            if (localPatient) {
+              StorageService.updatePatientInfo(patientId, remotePatient);
+            }
           }
-        }
-      }).catch((e) => console.warn('Sync prescription deferred:', e));
+        });
 
-      // 환자 연결 관계 초기 1회 로드 및 로컬 반영
-      FirebaseService.getConnectionsForPatient(patientId).then((remoteConns) => {
-        if (remoteConns && remoteConns.length > 0) {
+        // 실시간 환자 연결 상태 리스너 (치료사의 수락/거절/해제 즉시 반응)
+        unsubConnections = FirebaseService.subscribeToPatientConnections(patientId, (remoteConns) => {
+          if (!remoteConns) return;
           StorageService.syncRemoteConnections(remoteConns);
           const activeOrPending = remoteConns.find((c) => c.status === 'connected' || c.status === 'pending');
           if (activeOrPending) {
@@ -177,97 +254,28 @@ export default function App() {
               requestedTherapistId: activeOrPending.status === 'pending' ? activeOrPending.therapistId : undefined,
               requestedTherapistName: activeOrPending.status === 'pending' ? activeOrPending.therapistName : undefined
             });
+          } else {
+            const disconnectedConn = remoteConns.find((c) => c.status === 'disconnected' || c.status === 'rejected');
+            if (disconnectedConn) {
+              StorageService.updatePatientInfo(patientId, {
+                connectionStatus: disconnectedConn.status as any,
+                therapistId: undefined,
+                therapistName: undefined
+              });
+            }
           }
           setTick((t) => t + 1);
-        }
-      }).catch((e) => console.warn('Sync patient connections deferred:', e));
-
-      // 실시간 환자 프로필 리스너
-      const unsubProfile = FirebaseService.subscribeToPatientProfile(patientId, (remotePatient) => {
-        if (remotePatient) {
-          const localPatient = StorageService.getPatientById(patientId);
-          if (localPatient) {
-            StorageService.updatePatientInfo(patientId, remotePatient);
-          }
-        }
-      });
-
-      // 실시간 환자 연결 상태 리스너 (치료사의 수락/거절/해제 즉시 반응)
-      const unsubConnections = FirebaseService.subscribeToPatientConnections(patientId, (remoteConns) => {
-        if (!remoteConns) return;
-        StorageService.syncRemoteConnections(remoteConns);
-        const activeOrPending = remoteConns.find((c) => c.status === 'connected' || c.status === 'pending');
-        if (activeOrPending) {
-          StorageService.updatePatientInfo(patientId, {
-            connectionStatus: activeOrPending.status,
-            therapistId: activeOrPending.status === 'connected' ? activeOrPending.therapistId : undefined,
-            therapistName: activeOrPending.status === 'connected' ? activeOrPending.therapistName : undefined,
-            requestedTherapistId: activeOrPending.status === 'pending' ? activeOrPending.therapistId : undefined,
-            requestedTherapistName: activeOrPending.status === 'pending' ? activeOrPending.therapistName : undefined
-          });
-        } else {
-          const disconnectedConn = remoteConns.find((c) => c.status === 'disconnected' || c.status === 'rejected');
-          if (disconnectedConn) {
-            StorageService.updatePatientInfo(patientId, {
-              connectionStatus: disconnectedConn.status as any,
-              therapistId: undefined,
-              therapistName: undefined
-            });
-          }
-        }
-        setTick((t) => t + 1);
-      });
-
-      return () => {
-        unsubProfile();
-        unsubConnections();
-      };
-    }
-
-    // 2. Therapist Sync: Query connections collection + individual users getDoc (Requirement 4)
-    if (currentUser.role === 'therapist') {
-      const authUid = getFirebaseAuth()?.currentUser?.uid;
-      const therapistId = authUid || currentUser.id;
-      // If currentUser is a local demo therapist and not the currently logged in Firebase user, skip remote sync
-      if (authUid && currentUser.id !== authUid) {
-        return;
+        });
       }
 
-      // 연결된 담당 환자 초기 조회
-      FirebaseService.getConnectedPatientsForTherapist(therapistId).then((patients) => {
-        if (patients && patients.length > 0) {
-          patients.forEach((p) => {
-            const existing = StorageService.getPatientById(p.id);
-            if (!existing) {
-              StorageService.addPatient(p);
-            } else {
-              StorageService.updatePatientInfo(p.id, p);
-            }
-          });
-          setTick((t) => t + 1);
-        }
-      }).catch((e) => console.warn('Sync therapist patients deferred:', e));
+      // 2. Therapist Sync: Query connections collection + individual users getDoc (Requirement 4)
+      if (currentUser.role === 'therapist') {
+        const therapistId = authUid;
 
-      // 대기 중인 연결 요청 및 전체 연결 초기 조회
-      FirebaseService.getConnectionsForTherapist(therapistId).then((conns) => {
-        if (conns && conns.length > 0) {
-          StorageService.syncRemoteConnections(conns);
-          const pendingConns = conns.filter((c) => c.status === 'pending');
-          StorageService.syncPendingRequestsFromConnections(pendingConns);
-          setTick((t) => t + 1);
-        }
-      }).catch((e) => console.warn('Sync therapist connections deferred:', e));
-
-      // 실시간 치료사 연결 리스너 (환자의 신규 요청, 연결 해제 즉시 감지)
-      const unsubTherapistConns = FirebaseService.subscribeToTherapistConnections(therapistId, (conns) => {
-        if (!conns) return;
-        StorageService.syncRemoteConnections(conns);
-        const pendingConns = conns.filter((c) => c.status === 'pending');
-        StorageService.syncPendingRequestsFromConnections(pendingConns);
-
-        // 승인된 연결이 있는 경우 환자 상세 프로필 동기화
+        // 연결된 담당 환자 초기 조회
         FirebaseService.getConnectedPatientsForTherapist(therapistId).then((patients) => {
-          if (patients && patients.length > 0) {
+          if (isCancelled || !patients) return;
+          if (patients.length > 0) {
             patients.forEach((p) => {
               const existing = StorageService.getPatientById(p.id);
               if (!existing) {
@@ -278,15 +286,53 @@ export default function App() {
             });
             setTick((t) => t + 1);
           }
-        }).catch((e) => console.warn('Sync therapist patients realtime deferred:', e));
+        }).catch((e) => console.warn('Sync therapist patients error:', e));
 
-        setTick((t) => t + 1);
-      });
+        // 대기 중인 연결 요청 및 전체 연결 초기 조회
+        FirebaseService.getConnectionsForTherapist(therapistId).then((conns) => {
+          if (isCancelled || !conns) return;
+          if (conns.length > 0) {
+            StorageService.syncRemoteConnections(conns);
+            const pendingConns = conns.filter((c) => c.status === 'pending');
+            StorageService.syncPendingRequestsFromConnections(pendingConns);
+            setTick((t) => t + 1);
+          }
+        }).catch((e) => console.warn('Sync therapist connections error:', e));
 
-      return () => {
-        unsubTherapistConns();
-      };
-    }
+        // 실시간 치료사 연결 리스너 (환자의 신규 요청, 연결 해제 즉시 감지)
+        unsubTherapistConns = FirebaseService.subscribeToTherapistConnections(therapistId, (conns) => {
+          if (!conns) return;
+          StorageService.syncRemoteConnections(conns);
+          const pendingConns = conns.filter((c) => c.status === 'pending');
+          StorageService.syncPendingRequestsFromConnections(pendingConns);
+
+          // 승인된 연결이 있는 경우 환자 상세 프로필 동기화
+          FirebaseService.getConnectedPatientsForTherapist(therapistId).then((patients) => {
+            if (isCancelled || !patients) return;
+            if (patients.length > 0) {
+              patients.forEach((p) => {
+                const existing = StorageService.getPatientById(p.id);
+                if (!existing) {
+                  StorageService.addPatient(p);
+                } else {
+                  StorageService.updatePatientInfo(p.id, p);
+                }
+              });
+              setTick((t) => t + 1);
+            }
+          }).catch((e) => console.warn('Sync therapist patients realtime error:', e));
+
+          setTick((t) => t + 1);
+        });
+      }
+    });
+
+    return () => {
+      isCancelled = true;
+      if (unsubProfile) unsubProfile();
+      if (unsubConnections) unsubConnections();
+      if (unsubTherapistConns) unsubTherapistConns();
+    };
   }, [currentUser?.id, currentUser?.patientId, currentUser?.role]);
 
   // Listen to auth changes and storage changes
