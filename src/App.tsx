@@ -106,8 +106,16 @@ export default function App() {
     assignment?: AssignedExercise;
   } | null>(null);
 
-  // Therapist Selection States
+  // Therapist Selection & Internal Navigation History States
   const [selectedPatientForTherapist, setSelectedPatientForTherapist] = useState<string>('');
+  const [therapistNavHistory, setTherapistNavHistory] = useState<
+    Array<{
+      tab: string;
+      detailedPatientId: string | null;
+      selectedPatientId: string;
+    }>
+  >([]);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
   // Modals & Tools
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
@@ -123,6 +131,9 @@ export default function App() {
     } else {
       setIsOnboardingGuideOpen(false);
     }
+    // Reset internal navigation history and mobile drawer when user session changes
+    setTherapistNavHistory([]);
+    setIsMobileSidebarOpen(false);
   }, [currentUser?.id]);
 
   // Initialize storage and verify Firebase backend connection once
@@ -346,6 +357,9 @@ export default function App() {
     const unsubAuth = subscribeToAuth(() => {
       const user = AuthService.getSessionUser();
       setCurrentUser(user);
+      setTherapistNavHistory([]);
+      setDetailedPatientId(null);
+      setIsMobileSidebarOpen(false);
       if (user) {
         if (user.role === 'therapist') {
           setTherapistTab('dashboard');
@@ -379,6 +393,9 @@ export default function App() {
   const handleSignUpSuccess = (user: AuthUser) => {
     setCurrentUser(user);
     setActiveExerciseDetail(null);
+    setTherapistNavHistory([]);
+    setDetailedPatientId(null);
+    setIsMobileSidebarOpen(false);
 
     if (user.role === 'patient') {
       setPatientTab('home');
@@ -401,6 +418,9 @@ export default function App() {
   const handleLoginSuccess = (user: AuthUser) => {
     setCurrentUser(user);
     setActiveExerciseDetail(null);
+    setTherapistNavHistory([]);
+    setDetailedPatientId(null);
+    setIsMobileSidebarOpen(false);
 
     if (user.role === 'therapist') {
       setTherapistTab('dashboard');
@@ -426,6 +446,9 @@ export default function App() {
     setCurrentUser(null);
     setIsLogoutModalOpen(false);
     setActiveExerciseDetail(null);
+    setDetailedPatientId(null);
+    setTherapistNavHistory([]);
+    setIsMobileSidebarOpen(false);
     setAuthScreen('login');
     addToast('info', '로그아웃되었습니다.', `${userName} 님의 세션이 안전하게 종료되었습니다.`);
   };
@@ -457,13 +480,122 @@ export default function App() {
     );
   };
 
+  // Therapist internal navigation helpers
+  const VALID_THERAPIST_TABS = new Set(['dashboard', 'patients', 'prescriptions', 'settings']);
+
+  const pushTherapistHistory = () => {
+    setTherapistNavHistory((prev) => {
+      const currentSnapshot = {
+        tab: VALID_THERAPIST_TABS.has(therapistTab) ? therapistTab : 'dashboard',
+        detailedPatientId,
+        selectedPatientId: selectedPatientForTherapist
+      };
+      const last = prev[prev.length - 1];
+      if (
+        last &&
+        last.tab === currentSnapshot.tab &&
+        last.detailedPatientId === currentSnapshot.detailedPatientId &&
+        last.selectedPatientId === currentSnapshot.selectedPatientId
+      ) {
+        return prev;
+      }
+      return [...prev.slice(-29), currentSnapshot];
+    });
+  };
+
   const handleTherapistNavigateTab = (tab: string, patientId?: string) => {
+    const targetTab = VALID_THERAPIST_TABS.has(tab) ? tab : 'dashboard';
+    const nextSelectedPatientId = patientId !== undefined ? patientId : selectedPatientForTherapist;
+
+    if (
+      targetTab !== therapistTab ||
+      detailedPatientId !== null ||
+      (patientId !== undefined && patientId !== selectedPatientForTherapist)
+    ) {
+      pushTherapistHistory();
+    }
+
     setDetailedPatientId(null);
-    setTherapistTab(tab);
-    if (patientId) {
-      setSelectedPatientForTherapist(patientId);
+    setTherapistTab(targetTab);
+    if (patientId !== undefined) {
+      setSelectedPatientForTherapist(nextSelectedPatientId);
     }
   };
+
+  const handleOpenTherapistPatientDetail = (patientId: string) => {
+    if (!patientId) return;
+    if (detailedPatientId !== patientId) {
+      pushTherapistHistory();
+    }
+    setSelectedPatientForTherapist(patientId);
+    setDetailedPatientId(patientId);
+  };
+
+  const handleTherapistBack = () => {
+    if (!currentUser || currentUser.role !== 'therapist') return;
+
+    const currentPatients = StorageService.getPatientsForTherapist(currentUser);
+    const validPatientIds = new Set(currentPatients.map((p) => p.id));
+
+    const nextHistory = [...therapistNavHistory];
+    let targetState: {
+      tab: string;
+      detailedPatientId: string | null;
+      selectedPatientId: string;
+    } | null = null;
+
+    while (nextHistory.length > 0) {
+      const candidate = nextHistory.pop()!;
+      const validTab = VALID_THERAPIST_TABS.has(candidate.tab) ? candidate.tab : 'dashboard';
+      const validDetailId =
+        candidate.detailedPatientId && validPatientIds.has(candidate.detailedPatientId)
+          ? candidate.detailedPatientId
+          : null;
+
+      if (validTab === therapistTab && validDetailId === detailedPatientId) {
+        continue;
+      }
+
+      targetState = {
+        tab: validTab,
+        detailedPatientId: validDetailId,
+        selectedPatientId: candidate.selectedPatientId
+      };
+      break;
+    }
+
+    setTherapistNavHistory(nextHistory);
+
+    if (targetState) {
+      setTherapistTab(targetState.tab);
+      setDetailedPatientId(targetState.detailedPatientId);
+      if (targetState.selectedPatientId && validPatientIds.has(targetState.selectedPatientId)) {
+        setSelectedPatientForTherapist(targetState.selectedPatientId);
+      }
+      return;
+    }
+
+    // Fallback when no previous history entry exists
+    if (detailedPatientId !== null) {
+      setDetailedPatientId(null);
+      if (!VALID_THERAPIST_TABS.has(therapistTab)) {
+        setTherapistTab('dashboard');
+      }
+      return;
+    }
+
+    if (therapistTab !== 'dashboard') {
+      setTherapistTab('dashboard');
+    }
+  };
+
+  const hasValidPreviousTherapistHistory = therapistNavHistory.some(
+    (entry) => entry.tab !== therapistTab || entry.detailedPatientId !== detailedPatientId
+  );
+
+  const canTherapistGoBack =
+    currentUser?.role === 'therapist' &&
+    (hasValidPreviousTherapistHistory || detailedPatientId !== null || therapistTab !== 'dashboard');
 
   // 1. Unauthenticated View (Clean 2-Column Login & Sign Up)
   if (!currentUser) {
@@ -535,16 +667,19 @@ export default function App() {
         onTabChange={(tab) => {
           setActiveExerciseDetail(null);
           setIsGuidedWorkoutOpen(false);
-          setDetailedPatientId(null);
           if (currentUser.role === 'patient') {
+            setDetailedPatientId(null);
             setPatientTab(tab);
           } else {
-            setTherapistTab(tab);
+            handleTherapistNavigateTab(tab);
           }
         }}
         onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
         isMobilePreview={isMobilePreview}
         onToggleMobilePreview={() => setIsMobilePreview(!isMobilePreview)}
+        canGoBack={canTherapistGoBack}
+        onGoBack={handleTherapistBack}
+        onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
       />
 
       {/* Main Content Viewport */}
@@ -666,20 +801,37 @@ export default function App() {
             )}
           </div>
         ) : currentUser.role === 'therapist' ? (
-          /* Therapist View Container (PC / Tablet optimized with Sidebar) */
+          /* Therapist View Container (PC / Tablet optimized with Unified Left Sidebar) */
           <div className="flex flex-col lg:flex-row min-h-[calc(100vh-65px)]">
-            {/* PC Sidebar */}
+            {/* Desktop Left Sidebar */}
             <div className="hidden lg:block shrink-0">
               <TherapistSidebar
-                currentTab={therapistTab}
-                onTabChange={(tab) => {
-                  setDetailedPatientId(null);
-                  setTherapistTab(tab);
-                }}
+                currentTab={detailedPatientId ? 'patients' : therapistTab}
+                onTabChange={(tab) => handleTherapistNavigateTab(tab)}
                 currentUser={currentUser}
                 onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
               />
             </div>
+
+            {/* Mobile & Tablet Slide-over Sidebar Drawer */}
+            {isMobileSidebarOpen && (
+              <div className="lg:hidden fixed inset-0 z-50 flex">
+                <div
+                  className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                />
+                <div className="relative z-10 flex h-full">
+                  <TherapistSidebar
+                    currentTab={detailedPatientId ? 'patients' : therapistTab}
+                    onTabChange={(tab) => handleTherapistNavigateTab(tab)}
+                    currentUser={currentUser}
+                    onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
+                    isMobileDrawer
+                    onCloseMobileDrawer={() => setIsMobileSidebarOpen(false)}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Main Content Area */}
             <div className="flex-1 py-6 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
@@ -691,13 +843,19 @@ export default function App() {
                     therapistPatients[0] ||
                     allPatients[0]
                   }
-                  onBack={() => setDetailedPatientId(null)}
+                  onBack={handleTherapistBack}
                   onNavigateToProgramEditor={(patientId) => {
-                    setSelectedPatientForTherapist(patientId);
-                    setDetailedPatientId(null);
-                    setTherapistTab('prescriptions');
+                    handleTherapistNavigateTab('prescriptions', patientId);
                   }}
                   onPatientDisconnected={(patientName) => {
+                    const disconnectedId = detailedPatientId;
+                    setTherapistNavHistory((prev) =>
+                      prev.map((entry) =>
+                        entry.detailedPatientId === disconnectedId
+                          ? { ...entry, detailedPatientId: null }
+                          : entry
+                      )
+                    );
                     setDetailedPatientId(null);
                     setTherapistTab('patients');
                     setTick((t) => t + 1);
@@ -730,12 +888,10 @@ export default function App() {
                     <TherapistDashboard
                       currentUser={currentUser}
                       onSelectPatientForProgram={(patientId) => {
-                        setSelectedPatientForTherapist(patientId);
-                        setDetailedPatientId(null);
-                        setTherapistTab('prescriptions');
+                        handleTherapistNavigateTab('prescriptions', patientId);
                       }}
                       onNavigateTab={handleTherapistNavigateTab}
-                      onOpenPatientDetail={(patientId) => setDetailedPatientId(patientId)}
+                      onOpenPatientDetail={handleOpenTherapistPatientDetail}
                     />
                   )}
 
@@ -746,15 +902,11 @@ export default function App() {
                       selectedPatientId={selectedPatientForTherapist}
                       onSelectPatient={setSelectedPatientForTherapist}
                       onNavigateToProgramEditor={(patientId) => {
-                        setSelectedPatientForTherapist(patientId);
-                        setDetailedPatientId(null);
-                        setTherapistTab('prescriptions');
+                        handleTherapistNavigateTab('prescriptions', patientId);
                       }}
-                      onNavigateToLogs={(patientId) => {
-                        setDetailedPatientId(patientId);
-                      }}
-                      onOpenPatientDetail={(patientId) => setDetailedPatientId(patientId)}
-                      onNavigateToSettings={() => setTherapistTab('settings')}
+                      onNavigateToLogs={handleOpenTherapistPatientDetail}
+                      onOpenPatientDetail={handleOpenTherapistPatientDetail}
+                      onNavigateToSettings={() => handleTherapistNavigateTab('settings')}
                       onPatientListUpdated={() => setTick((t) => t + 1)}
                     />
                   )}

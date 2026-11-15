@@ -10,7 +10,9 @@ import {
   Monitor, 
   User, 
   Stethoscope, 
-  LogOut
+  LogOut,
+  ArrowLeft,
+  Menu
 } from 'lucide-react';
 import { RehabLogo } from './RehabLogo';
 import { FirebaseService, FirebaseConnectionStatus } from '../../services/firebaseService';
@@ -22,6 +24,9 @@ interface NavbarProps {
   onOpenLogoutModal: () => void;
   isMobilePreview: boolean;
   onToggleMobilePreview: () => void;
+  canGoBack?: boolean;
+  onGoBack?: () => void;
+  onOpenMobileSidebar?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -30,7 +35,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTabChange,
   onOpenLogoutModal,
   isMobilePreview,
-  onToggleMobilePreview
+  onToggleMobilePreview,
+  canGoBack = false,
+  onGoBack,
+  onOpenMobileSidebar
 }) => {
   const [fbStatus, setFbStatus] = React.useState<FirebaseConnectionStatus>(() => FirebaseService.getConnectionStatus());
 
@@ -47,15 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'profile', label: '마이페이지' }
   ];
 
-  const therapistTabs = [
-    { id: 'dashboard', label: '홈' },
-    { id: 'patients', label: '담당 환자' },
-    { id: 'prescriptions', label: '운동 처방' },
-    { id: 'settings', label: '마이페이지' }
-  ];
-
   const isTherapist = currentUser.role === 'therapist';
-  const tabs = isTherapist ? therapistTabs : patientTabs;
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-gray-200">
@@ -68,7 +68,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {isTherapist ? '물리치료사 모드' : '환자 재활 모드'}
           </span>
           <span className="text-blue-300">|</span>
-          {/* Live Firebase Connection Status Badge (Requirement 15) */}
+          {/* Live Firebase Connection Status Badge */}
           {fbStatus.isConnected ? (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -109,112 +109,153 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Main Top Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-8 h-16">
-          {/* Brand Wordmark */}
-          <div className="flex items-center gap-3 shrink-0">
-            <RehabLogo size="sm" showText={false} />
-            <div className="flex flex-col">
-              <span className="text-base font-extrabold tracking-tight text-gray-900 whitespace-nowrap">
-                Rehab<span className="text-blue-600">Exercise</span>
-              </span>
-              <span className="text-[10px] text-gray-500 font-medium whitespace-nowrap">
-                {isTherapist ? '물리치료사 포털' : '재활운동 관리 솔루션'}
-              </span>
-            </div>
-          </div>
-
-          {/* Navigation Links (Desktop) */}
-          <nav className="hidden md:flex items-center gap-6">
-            {tabs.map((tab) => {
-              const isActive = currentTab === tab.id;
-              return (
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
+        {isTherapist ? (
+          /* Therapist Top Header: Left Back Button | Center Brand Logo | Right Therapist Info & Logout */
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-4 h-16">
+            {/* Left: Mobile Sidebar Toggle (on < lg) + Back Button */}
+            <div className="justify-self-start flex items-center gap-1.5 sm:gap-2 min-w-0">
+              {onOpenMobileSidebar && (
                 <button
-                  key={tab.id}
-                  onClick={() => onTabChange(tab.id)}
-                  className={`text-sm font-bold transition-colors whitespace-nowrap py-1 relative cursor-pointer ${
-                    isActive
-                      ? 'text-blue-600 font-extrabold'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  type="button"
+                  onClick={onOpenMobileSidebar}
+                  className="lg:hidden inline-flex items-center justify-center p-2 rounded-xl text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/70 border border-gray-200 hover:border-blue-200 transition-colors cursor-pointer shrink-0"
+                  title="사이드바 메뉴 열기"
+                  aria-label="사이드바 메뉴 열기"
                 >
-                  {tab.label}
-                  {isActive && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 rounded-full" />
-                  )}
+                  <Menu className="w-4 h-4" />
                 </button>
-              );
-            })}
-          </nav>
-
-          {/* User Capsule & Logout */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* User Profile Capsule */}
-            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50/70">
-              <div
-                className={`w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 ${
-                  isTherapist ? 'bg-blue-600' : 'bg-emerald-600'
+              )}
+              <button
+                type="button"
+                onClick={onGoBack}
+                disabled={!canGoBack}
+                className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-bold border transition-all whitespace-nowrap shrink-0 ${
+                  canGoBack
+                    ? 'text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/80 border-gray-200 hover:border-blue-200 shadow-2xs cursor-pointer'
+                    : 'text-gray-400 bg-gray-50/60 border-gray-200/70 opacity-50 cursor-not-allowed'
                 }`}
+                title={canGoBack ? '이전 화면으로 이동' : '현재 홈 화면입니다'}
+                aria-label="뒤로가기"
               >
-                {isTherapist ? (
-                  <Stethoscope className="w-4 h-4" />
-                ) : (
-                  <User className="w-4 h-4" />
-                )}
-              </div>
-              <div className="text-left text-xs">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-gray-900 leading-tight">
-                    {currentUser.name}
-                  </span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                      isTherapist
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-emerald-100 text-emerald-800'
-                    }`}
-                  >
-                    {isTherapist ? '물리치료사' : '환자'}
-                  </span>
-                </div>
-                <span className="text-[11px] text-gray-500 font-mono block leading-tight">
-                  @{currentUser.username}
+                <ArrowLeft className="w-4 h-4 shrink-0" />
+                <span>뒤로가기</span>
+              </button>
+            </div>
+
+            {/* Center: Visually Centered RehabExercise Brand Logo & Text */}
+            <div className="justify-self-center flex items-center gap-2 sm:gap-3 shrink-0">
+              <RehabLogo size="sm" showText={false} />
+              <div className="flex flex-col">
+                <span className="text-sm sm:text-base font-extrabold tracking-tight text-gray-900 whitespace-nowrap">
+                  Rehab<span className="text-blue-600">Exercise</span>
+                </span>
+                <span className="text-[10px] text-gray-500 font-medium whitespace-nowrap">
+                  물리치료사 포털
                 </span>
               </div>
             </div>
 
-            {/* Logout Action Button */}
-            <button
-              onClick={onOpenLogoutModal}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors whitespace-nowrap cursor-pointer"
-              title="세션 종료 및 로그아웃"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">로그아웃</span>
-            </button>
-          </div>
-        </div>
+            {/* Right: Therapist Profile Capsule & Logout */}
+            <div className="justify-self-end flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+              <div className="flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50/70 min-w-0">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 bg-blue-600">
+                  <Stethoscope className="w-4 h-4" />
+                </div>
+                <div className="text-left text-xs min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-gray-900 leading-tight truncate max-w-[72px] sm:max-w-none">
+                      {currentUser.name}
+                    </span>
+                    <span className="hidden md:inline-block text-[10px] px-1.5 py-0.2 rounded font-bold bg-blue-100 text-blue-800 whitespace-nowrap">
+                      물리치료사
+                    </span>
+                  </div>
+                  <span className="hidden sm:block text-[11px] text-gray-500 font-mono leading-tight truncate max-w-[140px]">
+                    @{currentUser.username}
+                  </span>
+                </div>
+              </div>
 
-        {/* Mobile Navigation Tabs for Therapist */}
-        {isTherapist && (
-          <div className="md:hidden flex items-center justify-between gap-1 overflow-x-auto py-2 border-t border-gray-100 no-scrollbar">
-            <div className="flex items-center gap-1.5">
-              {tabs.map((tab) => {
+              <button
+                type="button"
+                onClick={onOpenLogoutModal}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors whitespace-nowrap cursor-pointer shrink-0"
+                title="세션 종료 및 로그아웃"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">로그아웃</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Patient Top Header: Unchanged */
+          <div className="flex items-center justify-between gap-8 h-16">
+            {/* Brand Wordmark */}
+            <div className="flex items-center gap-3 shrink-0">
+              <RehabLogo size="sm" showText={false} />
+              <div className="flex flex-col">
+                <span className="text-base font-extrabold tracking-tight text-gray-900 whitespace-nowrap">
+                  Rehab<span className="text-blue-600">Exercise</span>
+                </span>
+                <span className="text-[10px] text-gray-500 font-medium whitespace-nowrap">
+                  재활운동 관리 솔루션
+                </span>
+              </div>
+            </div>
+
+            {/* Navigation Links (Desktop) */}
+            <nav className="hidden md:flex items-center gap-6">
+              {patientTabs.map((tab) => {
                 const isActive = currentTab === tab.id;
                 return (
                   <button
                     key={tab.id}
                     onClick={() => onTabChange(tab.id)}
-                    className={`text-xs px-3 py-1.5 rounded-xl font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    className={`text-sm font-bold transition-colors whitespace-nowrap py-1 relative cursor-pointer ${
                       isActive
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        ? 'text-blue-600 font-extrabold'
+                        : 'text-gray-600 hover:text-gray-900'
                     }`}
                   >
                     {tab.label}
+                    {isActive && (
+                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 rounded-full" />
+                    )}
                   </button>
                 );
               })}
+            </nav>
+
+            {/* User Capsule & Logout */}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50/70">
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 bg-emerald-600">
+                  <User className="w-4 h-4" />
+                </div>
+                <div className="text-left text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-gray-900 leading-tight">
+                      {currentUser.name}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded font-bold bg-emerald-100 text-emerald-800">
+                      환자
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-gray-500 font-mono block leading-tight">
+                    @{currentUser.username}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={onOpenLogoutModal}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors whitespace-nowrap cursor-pointer"
+                title="세션 종료 및 로그아웃"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">로그아웃</span>
+              </button>
             </div>
           </div>
         )}

@@ -14,7 +14,8 @@ import {
   LogOut,
   Stethoscope,
   KeyRound,
-  Copy
+  Copy,
+  X
 } from 'lucide-react';
 
 interface TherapistSidebarProps {
@@ -22,13 +23,17 @@ interface TherapistSidebarProps {
   onTabChange: (tab: string) => void;
   currentUser: AuthUser;
   onOpenLogoutModal: () => void;
+  isMobileDrawer?: boolean;
+  onCloseMobileDrawer?: () => void;
 }
 
 export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   currentTab,
   onTabChange,
   currentUser,
-  onOpenLogoutModal
+  onOpenLogoutModal,
+  isMobileDrawer = false,
+  onCloseMobileDrawer
 }) => {
   const [copied, setCopied] = useState(false);
   const connectionCode = currentUser.connectionCode || '코드 미발급';
@@ -68,8 +73,30 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   ];
 
   return (
-    <aside className="w-64 bg-white border-r border-gray-200 flex flex-col justify-between shrink-0 min-h-[calc(100vh-65px)] sticky top-[65px]">
+    <aside
+      className={`w-64 bg-white border-r border-gray-200 flex flex-col justify-between shrink-0 ${
+        isMobileDrawer
+          ? 'h-full overflow-y-auto shadow-2xl'
+          : 'min-h-[calc(100vh-65px)] sticky top-[65px]'
+      }`}
+    >
       <div>
+        {isMobileDrawer && (
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <span className="text-xs font-extrabold text-gray-900">물리치료사 메뉴</span>
+            {onCloseMobileDrawer && (
+              <button
+                type="button"
+                onClick={onCloseMobileDrawer}
+                className="p-1.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors cursor-pointer"
+                aria-label="메뉴 닫기"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Therapist Connection Code Box */}
         <div className="p-3.5 mx-3 mt-4 rounded-2xl bg-blue-50 border border-blue-200 space-y-1.5">
           <div className="flex items-center justify-between">
@@ -106,7 +133,12 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
               <button
                 key={item.id}
                 type="button"
-                onClick={() => onTabChange(item.id)}
+                onClick={() => {
+                  onTabChange(item.id);
+                  if (onCloseMobileDrawer) {
+                    onCloseMobileDrawer();
+                  }
+                }}
                 className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl text-xs font-bold transition-all text-left cursor-pointer ${
                   isActive
                     ? 'bg-blue-600 text-white shadow-xs'
@@ -149,7 +181,12 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
 
         <button
           type="button"
-          onClick={onOpenLogoutModal}
+          onClick={() => {
+            if (onCloseMobileDrawer) {
+              onCloseMobileDrawer();
+            }
+            onOpenLogoutModal();
+          }}
           className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-colors cursor-pointer"
         >
           <LogOut className="w-3.5 h-3.5" />
