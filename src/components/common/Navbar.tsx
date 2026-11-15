@@ -113,24 +113,24 @@ export const Navbar: React.FC<NavbarProps> = ({
         {isTherapist ? (
           /* Therapist Top Header: Left Back Button | Center Brand Logo | Right Therapist Info & Logout */
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-4 h-16">
-            {/* Left: Mobile Sidebar Toggle (on < lg) + Back Button */}
-            <div className="justify-self-start flex items-center gap-1.5 sm:gap-2 min-w-0">
+            {/* Left: Mobile Sidebar Toggle (on < lg) + Icon-only Back Button (min 44x44px) */}
+            <div className="justify-self-start flex items-center gap-2 min-w-0">
               {onOpenMobileSidebar && (
                 <button
                   type="button"
                   onClick={onOpenMobileSidebar}
-                  className="lg:hidden inline-flex items-center justify-center p-2 rounded-xl text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/70 border border-gray-200 hover:border-blue-200 transition-colors cursor-pointer shrink-0"
+                  className="lg:hidden inline-flex items-center justify-center w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/80 border border-gray-200 hover:border-blue-200 shadow-2xs transition-all cursor-pointer shrink-0"
                   title="사이드바 메뉴 열기"
                   aria-label="사이드바 메뉴 열기"
                 >
-                  <Menu className="w-4 h-4" />
+                  <Menu className="w-5 h-5 shrink-0" strokeWidth={2.25} />
                 </button>
               )}
               <button
                 type="button"
                 onClick={onGoBack}
                 disabled={!canGoBack}
-                className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-bold border transition-all whitespace-nowrap shrink-0 ${
+                className={`inline-flex items-center justify-center w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl border transition-all shrink-0 ${
                   canGoBack
                     ? 'text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/80 border-gray-200 hover:border-blue-200 shadow-2xs cursor-pointer'
                     : 'text-gray-400 bg-gray-50/60 border-gray-200/70 opacity-50 cursor-not-allowed'
@@ -138,8 +138,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 title={canGoBack ? '이전 화면으로 이동' : '현재 홈 화면입니다'}
                 aria-label="뒤로가기"
               >
-                <ArrowLeft className="w-4 h-4 shrink-0" />
-                <span>뒤로가기</span>
+                <ArrowLeft className="w-[25px] h-[25px] shrink-0" strokeWidth={2.5} />
               </button>
             </div>
 
@@ -147,24 +146,24 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="justify-self-center flex items-center gap-2 sm:gap-3 shrink-0">
               <RehabLogo size="sm" showText={false} />
               <div className="flex flex-col">
-                <span className="text-sm sm:text-base font-extrabold tracking-tight text-gray-900 whitespace-nowrap">
+                <span className="text-sm sm:text-base font-extrabold tracking-tight text-gray-900 whitespace-nowrap leading-tight">
                   Rehab<span className="text-blue-600">Exercise</span>
                 </span>
-                <span className="text-[10px] text-gray-500 font-medium whitespace-nowrap">
+                <span className="text-[10px] text-gray-500 font-medium whitespace-nowrap leading-tight">
                   물리치료사 포털
                 </span>
               </div>
             </div>
 
             {/* Right: Therapist Profile Capsule & Logout */}
-            <div className="justify-self-end flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
-              <div className="flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50/70 min-w-0">
+            <div className="justify-self-end flex items-center gap-1.5 sm:gap-3 shrink-0 min-w-0">
+              <div className="flex items-center gap-2 sm:gap-2.5 px-2 sm:px-3 py-1.5 rounded-xl border border-gray-200 bg-gray-50/70 min-w-0">
                 <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 bg-blue-600">
                   <Stethoscope className="w-4 h-4" />
                 </div>
-                <div className="text-left text-xs min-w-0">
+                <div className="hidden min-[400px]:block text-left text-xs min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-gray-900 leading-tight truncate max-w-[72px] sm:max-w-none">
+                    <span className="font-bold text-gray-900 leading-tight truncate max-w-[56px] sm:max-w-none">
                       {currentUser.name}
                     </span>
                     <span className="hidden md:inline-block text-[10px] px-1.5 py-0.2 rounded font-bold bg-blue-100 text-blue-800 whitespace-nowrap">
@@ -180,10 +179,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 type="button"
                 onClick={onOpenLogoutModal}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors whitespace-nowrap cursor-pointer shrink-0"
+                className="inline-flex items-center justify-center gap-1.5 min-w-[38px] min-h-[38px] px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors whitespace-nowrap cursor-pointer shrink-0"
                 title="세션 종료 및 로그아웃"
+                aria-label="로그아웃"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-4 h-4 sm:w-3.5 sm:h-3.5 shrink-0" />
                 <span className="hidden sm:inline">로그아웃</span>
               </button>
             </div>

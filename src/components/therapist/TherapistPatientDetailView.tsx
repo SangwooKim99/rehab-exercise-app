@@ -222,11 +222,13 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-gray-200 shadow-xs">
         <div className="flex items-center gap-3">
           <button
+            type="button"
             onClick={onBack}
-            className="p-2 rounded-xl text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors cursor-pointer"
-            title="담당 환자 목록으로 돌아가기"
+            className="inline-flex items-center justify-center w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl text-gray-700 hover:text-blue-600 bg-gray-50 hover:bg-blue-50/80 border border-gray-200 hover:border-blue-200 shadow-2xs transition-all cursor-pointer shrink-0"
+            title="이전 화면으로 이동"
+            aria-label="뒤로가기"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-[25px] h-[25px] shrink-0" strokeWidth={2.5} />
           </button>
           <div>
             <div className="flex items-center gap-2">
