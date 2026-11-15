@@ -10,15 +10,10 @@ import {
   Plus,
   Trash2,
   Save,
-  CheckCircle2,
-  AlertCircle,
-  HelpCircle,
   Dumbbell,
   X,
-  ExternalLink,
   ChevronDown,
-  Search,
-  RotateCcw
+  Search
 } from 'lucide-react';
 import { ALL_BODY_PARTS, BodyPartBadge } from '../common/BodyPartIcons';
 
@@ -27,15 +22,13 @@ interface TherapistProgramEditorProps {
   selectedPatientId: string;
   onSelectPatient: (patientId: string) => void;
   onSaveSuccess: (patientName: string) => void;
-  onSwitchToPatientView: (patientId: string) => void;
 }
 
 export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
   patients,
   selectedPatientId,
   onSelectPatient,
-  onSaveSuccess,
-  onSwitchToPatientView
+  onSaveSuccess
 }) => {
   const library = StorageService.getExerciseLibrary();
   const currentPatient = patients.find((p) => p.id === selectedPatientId) || patients[0];
@@ -49,6 +42,8 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
   React.useEffect(() => {
     if (currentPatient) {
       setWorkingProgram([...currentPatient.assignedProgram]);
+    } else {
+      setWorkingProgram([]);
     }
   }, [selectedPatientId, currentPatient?.id]);
 
@@ -166,6 +161,22 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     return true;
   });
 
+  if (patients.length === 0 || !currentPatient) {
+    return (
+      <div className="space-y-6 pb-16">
+        <div className="bg-white rounded-3xl border border-gray-200 p-8 sm:p-12 text-center space-y-3 shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+            <Dumbbell className="w-7 h-7" />
+          </div>
+          <h1 className="text-lg font-black text-gray-900">운동 처방 대상 환자가 없습니다</h1>
+          <p className="text-xs text-gray-500 max-w-md mx-auto leading-relaxed">
+            담당 환자와 연결된 후 운동 프로그램을 처방하고 수정할 수 있습니다. 먼저 홈 또는 담당 환자 탭에서 환자의 연결 요청을 수락해 주세요.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 pb-16">
       {/* Top Patient Selector & Action Bar */}
@@ -197,15 +208,6 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
               </select>
               <ChevronDown className="w-3.5 h-3.5 text-gray-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-
-            <button
-              onClick={() => onSwitchToPatientView(currentPatient.id)}
-              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl flex items-center gap-1 transition-colors"
-              title="해당 환자 모드로 화면 전환하여 확인"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">대상자 화면 확인</span>
-            </button>
           </div>
         </div>
 

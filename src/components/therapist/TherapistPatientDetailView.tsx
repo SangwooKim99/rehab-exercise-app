@@ -22,7 +22,6 @@ import {
   Trash2,
   Settings,
   HeartPulse,
-  ExternalLink,
   ShieldCheck,
   Calendar,
   Sparkles,
@@ -40,7 +39,6 @@ interface TherapistPatientDetailViewProps {
   patient: Patient;
   onBack: () => void;
   onNavigateToProgramEditor: (patientId: string) => void;
-  onSwitchToPatientView: (patientId: string) => void;
   onFeedbackSaved: () => void;
   currentUser?: AuthUser;
   onPatientDisconnected?: (patientName: string) => void;
@@ -51,7 +49,6 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
   patient,
   onBack,
   onNavigateToProgramEditor,
-  onSwitchToPatientView,
   onFeedbackSaved,
   currentUser,
   onPatientDisconnected,
@@ -281,15 +278,6 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
               <span>새 운동 처방하기</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => onSwitchToPatientView(patient.id)}
-            className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
-            title="이 환자의 시연 모드로 바로 전환"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>{patient.name} 화면 보기</span>
-          </button>
           {isDisconnected ? (
             <span className="px-3 py-2 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl flex items-center gap-1">
               <UserX className="w-3.5 h-3.5" />

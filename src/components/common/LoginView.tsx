@@ -14,13 +14,10 @@ import {
   AlertCircle, 
   ArrowRight,
   UserPlus,
-  KeyRound,
   Stethoscope,
   Video,
   CheckCircle2,
-  Sparkles,
-  ChevronDown,
-  ChevronUp
+  Sparkles
 } from 'lucide-react';
 import { StorageService } from '../../services/storageService';
 import { RehabLogo } from './RehabLogo';
@@ -43,7 +40,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [showDemoAccounts, setShowDemoAccounts] = useState<boolean>(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,9 +52,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (result.success && result.user) {
         if (result.user.role === 'patient' && inviteTherapist) {
-          const foundTherapist = AuthService.findTherapistByConnectionCode(inviteTherapist.connectionCode);
+          const foundTherapist = await AuthService.findTherapistByConnectionCodeAsync(inviteTherapist.connectionCode);
           if (foundTherapist) {
-            StorageService.sendConnectionRequest(
+            await StorageService.sendConnectionRequest(
               result.user.patientId || result.user.id,
               result.user.name,
               foundTherapist,
@@ -75,15 +71,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
       setErrorMessage(err?.message || '로그인 처리 중 오류가 발생했습니다.');
     }
   };
-
-  const handleQuickFill = (accUsername: string, accPasswordHash: string) => {
-    setUsername(accUsername);
-    setPassword(accPasswordHash);
-    setErrorMessage('');
-  };
-
-  // Only show patient and therapist accounts for quick testing
-  const allAccounts = AuthService.getAccounts().filter((a) => a.role === 'patient' || a.role === 'therapist');
 
   const coreFeatures = [
     {
@@ -244,7 +231,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       type="text"
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="예: user@example.com 또는 patient01"
+                      placeholder="예: user@example.com"
                       className="w-full pl-10 pr-4 py-3 text-xs sm:text-sm rounded-xl border border-gray-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                       autoComplete="username"
                       required
@@ -311,64 +298,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   <UserPlus className="w-3.5 h-3.5" />
                   <span>회원가입</span>
                 </button>
-              </div>
-
-              {/* Presentation Demo Accounts Collapsible */}
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowDemoAccounts(!showDemoAccounts)}
-                  className="w-full py-2 px-3 text-[11px] font-semibold text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-50 flex items-center justify-between border border-dashed border-gray-200 transition-colors cursor-pointer"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-blue-600" />
-                    시연용 테스트 계정 바로 입력
-                  </span>
-                  {showDemoAccounts ? (
-                    <ChevronUp className="w-3.5 h-3.5 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-                  )}
-                </button>
-
-                {showDemoAccounts && (
-                  <div className="mt-2.5 p-3 rounded-2xl bg-gray-50 border border-gray-200 space-y-2 animate-in fade-in duration-150">
-                    <p className="text-[11px] text-gray-500 leading-normal">
-                      클릭 시 해당 계정의 아이디와 비밀번호가 자동으로 입력됩니다.
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {allAccounts.map((acc) => {
-                        const isTherapist = acc.role === 'therapist';
-                        return (
-                          <button
-                            key={acc.username}
-                            type="button"
-                            onClick={() => handleQuickFill(acc.username, acc.passwordHash)}
-                            className="p-2 rounded-xl border border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/50 text-left transition-all cursor-pointer"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-bold text-gray-900 text-[11px] truncate">
-                                {acc.name}
-                              </span>
-                              <span
-                                className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
-                                  isTherapist
-                                    ? 'bg-blue-100 text-blue-700'
-                                    : 'bg-emerald-100 text-emerald-800'
-                                }`}
-                              >
-                                {isTherapist ? '물리치료사' : '환자'}
-                              </span>
-                            </div>
-                            <p className="text-[10px] font-mono text-gray-400 mt-0.5">
-                              {acc.username}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </div>
 
             </div>

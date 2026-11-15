@@ -54,7 +54,7 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
       stepNumber: 1,
       title: '담당 물리치료사 연결하기',
       subtitle: '전문 치료사의 1:1 맞춤 재활',
-      description: '담당 물리치료사에게 전달받은 연결 코드(예: PT-GW-821) 또는 초대 링크를 통해 연결을 요청하세요. 치료사가 승인하면 맞춤 재활 프로그램이 활성화됩니다.',
+      description: '담당 물리치료사에게 전달받은 연결 코드(예: PT-1234) 또는 초대 링크를 통해 연결을 요청하세요. 치료사가 승인하면 맞춤 재활 프로그램이 활성화됩니다.',
       icon: KeyRound,
       color: 'blue',
       tip: '홈 화면 상단의 [담당 치료사 연결하기] 버튼을 누르면 언제든지 코드를 입력할 수 있습니다.'
@@ -84,7 +84,7 @@ export const OnboardingGuideModal: React.FC<OnboardingGuideModalProps> = ({
       stepNumber: 1,
       title: '담당 환자 등록 및 연결하기',
       subtitle: '초대 링크 또는 연결 코드 공유',
-      description: '신규 환자에게 고유 연결 코드(예: PT-GW-821)를 알려주거나 초대 링크를 공유하여 담당 환자 목록에 안전하게 추가하세요.',
+      description: '신규 환자에게 고유 연결 코드(예: PT-1234)를 알려주거나 초대 링크를 공유하여 담당 환자 목록에 안전하게 추가하세요.',
       icon: Users,
       color: 'blue',
       tip: '환자가 코드를 입력하고 요청을 보내면 [연결 요청] 탭에서 원클릭으로 수락할 수 있습니다.'

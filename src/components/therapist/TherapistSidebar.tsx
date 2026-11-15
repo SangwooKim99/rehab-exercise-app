@@ -11,12 +11,10 @@ import {
   Users,
   ClipboardCheck,
   Settings,
-  Activity,
   LogOut,
   Stethoscope,
   KeyRound,
-  Copy,
-  ExternalLink
+  Copy
 } from 'lucide-react';
 
 interface TherapistSidebarProps {
@@ -24,23 +22,22 @@ interface TherapistSidebarProps {
   onTabChange: (tab: string) => void;
   currentUser: AuthUser;
   onOpenLogoutModal: () => void;
-  onSwitchToPatientDemo?: () => void;
 }
 
 export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
   currentTab,
   onTabChange,
   currentUser,
-  onOpenLogoutModal,
-  onSwitchToPatientDemo
+  onOpenLogoutModal
 }) => {
   const [copied, setCopied] = useState(false);
-  const connectionCode = currentUser.connectionCode || 'PT-GW-821';
+  const connectionCode = currentUser.connectionCode || '코드 미발급';
   const requests = StorageService.getRequestsForTherapist(currentUser);
   const pendingRequestsCount = requests.filter((r) => r.status === 'pending').length;
 
   const handleCopyCode = () => {
-    navigator.clipboard?.writeText(connectionCode);
+    if (!currentUser.connectionCode) return;
+    navigator.clipboard?.writeText(currentUser.connectionCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -80,14 +77,16 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
               <KeyRound className="w-3 h-3 text-blue-600" />
               환자 연결 코드
             </span>
-            <button
-              type="button"
-              onClick={handleCopyCode}
-              className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-0.5 cursor-pointer"
-            >
-              <Copy className="w-3 h-3" />
-              <span>{copied ? '복사됨!' : '복사'}</span>
-            </button>
+            {currentUser.connectionCode && (
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-0.5 cursor-pointer"
+              >
+                <Copy className="w-3 h-3" />
+                <span>{copied ? '복사됨!' : '복사'}</span>
+              </button>
+            )}
           </div>
           <div className="font-mono text-sm font-black text-blue-950 tracking-wider">
             {connectionCode}
@@ -129,21 +128,6 @@ export const TherapistSidebar: React.FC<TherapistSidebarProps> = ({
             );
           })}
         </nav>
-
-        {/* Fast Switcher for Presentation & Usability Evaluation */}
-        {onSwitchToPatientDemo && (
-          <div className="p-3 mx-3 mt-2">
-            <button
-              type="button"
-              onClick={onSwitchToPatientDemo}
-              className="w-full py-2.5 px-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-              title="환자 시연 모드로 바로 전환"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>환자 화면으로 전환 (김민수)</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Bottom Profile & Logout */}

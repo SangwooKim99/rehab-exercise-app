@@ -31,15 +31,13 @@ interface AddPatientModalProps {
   onClose: () => void;
   currentUser: AuthUser;
   onPatientAdded?: () => void;
-  onSimulatePatientInvite?: (inviteCode: string) => void;
 }
 
 export const AddPatientModal: React.FC<AddPatientModalProps> = ({
   isOpen,
   onClose,
   currentUser,
-  onPatientAdded,
-  onSimulatePatientInvite
+  onPatientAdded
 }) => {
   const [activeTab, setActiveTab] = useState<'invite' | 'code' | 'requests'>('invite');
   const [linkCopied, setLinkCopied] = useState(false);
@@ -51,7 +49,7 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
 
   if (!isOpen) return null;
 
-  const connectionCode = currentUser.connectionCode || 'PT-GW-821';
+  const connectionCode = currentUser.connectionCode || '';
   const therapistName = currentUser.name || '담당 물리치료사';
   const clinicName = currentUser.clinic || '재활센터';
 
@@ -122,48 +120,6 @@ ${inviteUrl}
     } finally {
       setProcessingRequestId(null);
     }
-  };
-
-  // One-click Presentation Demo simulation: Generate a test patient request from "이영희 (58세)"
-  const handleSimulateIncomingRequest = () => {
-    const demoPatientId = `patient-demo-${Date.now()}`;
-    const demoPatientName = '이영희';
-
-    // 1. Add patient if not exists
-    StorageService.addPatient({
-      id: demoPatientId,
-      name: demoPatientName,
-      age: 58,
-      gender: '여성',
-      diagnosis: '유착성 관절낭염(오십견) 및 어깨 가동범위 제한',
-      targetGoal: '어깨 굴곡 160도 회복 및 일상 통증 완화',
-      therapistNotes: '신규 초대 링크를 통해 가입한 환자입니다. 운동 처방이 필요합니다.',
-      assignedProgram: [],
-      connectionStatus: 'pending',
-      requestedTherapistId: currentUser.id,
-      requestedTherapistName: currentUser.name
-    });
-
-    // 2. Add connection request
-    StorageService.sendConnectionRequest(
-      demoPatientId,
-      demoPatientName,
-      {
-        id: currentUser.id,
-        username: currentUser.username,
-        name: currentUser.name,
-        passwordHash: '',
-        role: 'therapist',
-        connectionCode,
-        accountStatus: 'active',
-        registeredAt: new Date().toISOString()
-      },
-      'invite'
-    );
-
-    setActiveTab('requests');
-    setToastMsg('시연용 가상 환자 [이영희] 님의 연결 요청이 도착했습니다!');
-    setTimeout(() => setToastMsg(''), 3500);
   };
 
   return (
@@ -326,23 +282,6 @@ ${inviteUrl}`}
                   <li>치료사 대시보드에서 요청을 <strong>[수락]</strong>하면 담당 환자로 최종 등록됩니다.</li>
                 </ol>
               </div>
-
-              {/* Presentation Demo simulation */}
-              {onSimulatePatientInvite && (
-                <div className="pt-2 border-t border-gray-100">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onSimulatePatientInvite(connectionCode);
-                    }}
-                    className="w-full py-2.5 px-4 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4 text-emerald-600" />
-                    <span>[시연용] 이 초대 링크로 환자 가입 화면 열기 (테스트)</span>
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -388,18 +327,6 @@ ${inviteUrl}`}
                   <p>4. <strong className="text-gray-900">[연결 요청 보내기]</strong>를 누르면 치료사 화면에 승인 요청이 도착합니다.</p>
                 </div>
               </div>
-
-              {/* Quick simulation for evaluator */}
-              <div className="pt-2 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={handleSimulateIncomingRequest}
-                  className="w-full py-2.5 px-4 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-800 font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4 text-blue-600" />
-                  <span>[시연용] 가상 환자 '이영희'의 연결 요청 즉시 생성하기</span>
-                </button>
-              </div>
             </div>
           )}
 
@@ -426,14 +353,6 @@ ${inviteUrl}`}
                       환자가 초대 링크를 열거나 연결 코드를 입력하여 요청을 전송하면 이곳에 실시간으로 표시됩니다.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleSimulateIncomingRequest}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl transition-colors cursor-pointer text-xs"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>시연용 가상 환자 요청 테스트 생성</span>
-                  </button>
                 </div>
               ) : (
                 <div className="space-y-3">

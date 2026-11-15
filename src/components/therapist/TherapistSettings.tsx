@@ -7,18 +7,13 @@ import React, { useState } from 'react';
 import { AuthUser, Patient, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { 
-  Settings, 
   Stethoscope, 
   KeyRound, 
   Users, 
   CheckCircle2, 
   Clock, 
-  RefreshCw, 
   ShieldAlert,
-  Building,
   Copy,
-  XCircle,
-  UserX,
   HelpCircle,
   AlertCircle,
   Loader2
@@ -27,18 +22,16 @@ import { DisconnectConfirmModal } from '../common/DisconnectConfirmModal';
 
 interface TherapistSettingsProps {
   currentUser: AuthUser;
-  onResetData: () => void;
   onRefreshData: () => void;
   onOpenGuide?: () => void;
 }
 
 export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
   currentUser,
-  onResetData,
   onRefreshData,
   onOpenGuide
 }) => {
-  const connectionCode = currentUser.connectionCode || 'PT-GW-821';
+  const connectionCode = currentUser.connectionCode || '코드 미발급';
   const isVerified = currentUser.therapistVerification === 'verified';
   const myPatients = StorageService.getPatientsForTherapist(currentUser);
   const requests = StorageService.getRequestsForTherapist(currentUser);
@@ -54,7 +47,8 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
 
   const handleCopyCode = () => {
-    navigator.clipboard?.writeText(connectionCode);
+    if (!currentUser.connectionCode) return;
+    navigator.clipboard?.writeText(currentUser.connectionCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -154,7 +148,7 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
 
           <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100">
             <span className="text-gray-400 block text-[11px] mb-0.5">등록 면허 번호</span>
-            <span className="font-bold text-gray-900 font-mono">{currentUser.licenseCode || 'PT-2026-34821'}</span>
+            <span className="font-bold text-gray-900 font-mono">{currentUser.licenseCode || '미등록'}</span>
             <span className="text-emerald-700 block text-[10px] font-semibold mt-0.5">
               {isVerified ? '보건복지부 검증 완료' : '관리자 승인 대기 중'}
             </span>
@@ -171,11 +165,10 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
           <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1 text-amber-900">
             <span className="font-bold flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5 text-amber-600" />
-              전문가 안전장치 안내
+              전문가 자격 인증 안내
             </span>
             <p className="text-[11px] leading-relaxed text-amber-800">
-              현재 계정은 신규 등록된 물리치료사로서 <strong>수련/데모 모드</strong>로 구동 중입니다.
-              기본 기능 및 가상 환자 차트 시연이 가능하며, 최고 관리자가 면허 번호를 확인 후 정식 전문가 인증 배지를 활성화합니다.
+              현재 계정은 신규 등록된 물리치료사 계정입니다. 최고 관리자가 면허 번호를 확인한 후 정식 전문가 인증 배지를 활성화합니다.
             </p>
           </div>
         )}
@@ -198,14 +191,16 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
             <span className="text-sm text-blue-700 font-mono font-extrabold bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200 tracking-wider">
               {connectionCode}
             </span>
-            <button
-              type="button"
-              onClick={handleCopyCode}
-              className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition-colors flex items-center gap-1"
-            >
-              <Copy className="w-3.5 h-3.5" />
-              <span>{copied ? '복사됨!' : '복사'}</span>
-            </button>
+            {currentUser.connectionCode && (
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition-colors flex items-center gap-1"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{copied ? '복사됨!' : '복사'}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -341,31 +336,11 @@ export const TherapistSettings: React.FC<TherapistSettingsProps> = ({
         </div>
       )}
 
-      {/* 3. Demo Data Management */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-xs space-y-4">
-        <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-          <RefreshCw className="w-4 h-4 text-gray-600" />
-          <span>시연용 데모 데이터 초기화</span>
-        </h2>
-
-        <p className="text-xs text-gray-600 leading-relaxed">
-          수업 발표 및 시연 시 수정한 처방이나 기록을 초기 데모 상태(김민수, 이지훈, 박서연 기본 데이터)로 복원합니다.
-        </p>
-
-        <button
-          type="button"
-          onClick={onResetData}
-          className="py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-xl transition-colors"
-        >
-          초기 데모 데이터로 복원하기
-        </button>
-      </div>
-
-      {/* Academic Disclaimer */}
+      {/* Clinical Notice */}
       <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 text-[11px] text-gray-500 leading-relaxed flex items-start gap-2">
         <ShieldAlert className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
         <span>
-          본 시스템은 물리치료학과 발표 및 시연용 프로토타입입니다. 임상적으로 검증되지 않은 의학적 판단을 내리지 않으며 브라우저 로컬 저장소 기반으로 구동됩니다.
+          운동 처방 및 임상 피드백은 담당 물리치료사와 연결된 환자에게만 제공되며, Firebase Cloud Firestore 보안 규칙을 통해 보호됩니다.
         </span>
       </div>
     </div>

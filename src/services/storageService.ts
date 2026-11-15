@@ -25,8 +25,8 @@ import {
   INITIAL_WORKOUT_LOGS
 } from '../data/initialData';
 import { FirebaseService } from './firebaseService';
-import { getFirebaseAuth, waitForFirebaseAuthUid } from './firebase';
-import { AuthService } from './authService';
+import { waitForFirebaseAuthUid } from './firebase';
+import { isLegacyDemoIdentifier } from './authService';
 import { isFirebaseConfigured } from '../config/firebaseConfig';
 
 const PATIENTS_KEY = 'rehab_patients_v1';
@@ -40,106 +40,37 @@ const EXERCISES_KEY = 'rehab_exercises_v1';
 const VIDEO_SUBMISSIONS_KEY = 'rehab_video_submissions_v1';
 const ONBOARDING_GUIDE_KEY = 'rehab_onboarding_guide_v1';
 
-// Initial demo video submission for immediate usability testing
-const INITIAL_VIDEO_SUBMISSIONS: PatientVideoSubmission[] = [
-  {
-    id: 'sub-demo-1',
-    patientId: 'patient-1',
-    patientName: '김민수',
-    exerciseId: 'ex-7',
-    exerciseName: '브리지',
-    videoUrl: '',
-    fileName: 'minsu_bridge_exercise.mp4',
-    fileSizeBytes: 12450000,
-    submittedAt: '2026-11-02T16:30:00.000Z',
-    patientNotes: '골반을 들어 올릴 때 오른쪽 둔근에 힘이 덜 들어가는 느낌이 듭니다. 자세가 맞는지 확인 부탁드립니다.',
-    status: 'feedback_completed',
-    therapistFeedback: '엉덩이를 들어 올릴 때 오른쪽 골반이 약 2cm 정도 낮게 유지됩니다. 오른쪽 뒤꿈치로 바닥을 더 강하게 누르면서 수축을 유도해 보세요.',
-    feedbackAt: '2026-11-02T18:15:00.000Z',
-    therapistName: '박건우 PT'
-  }
-];
+// 시연용 초기 배열 제거: 빈 배열로 초기화하여 실제 Firebase 데이터만 사용
+const INITIAL_VIDEO_SUBMISSIONS: PatientVideoSubmission[] = [];
+const INITIAL_CONNECTIONS: PatientTherapistConnection[] = [];
+const INITIAL_INQUIRIES: SupportInquiry[] = [];
+const INITIAL_CONNECTION_REQUESTS: ConnectionRequest[] = [];
 
-// Initial demo patient-therapist independent connection records (Firebase-ready schema)
-const INITIAL_CONNECTIONS: PatientTherapistConnection[] = [
-  {
-    connectionId: 'conn-demo-1',
-    patientId: 'patient-1',
-    patientName: '김민수',
-    therapistId: 'acc-therapist-01',
-    therapistName: '박건우 PT',
-    status: 'connected',
-    createdAt: '2026-10-25T10:00:00.000Z',
-    connectedAt: '2026-10-25T10:05:00.000Z',
-    requestType: 'code',
-    inviteCode: 'PT-GW-821'
-  },
-  {
-    connectionId: 'conn-demo-2',
-    patientId: 'patient-2',
-    patientName: '이지훈',
-    therapistId: 'acc-therapist-01',
-    therapistName: '박건우 PT',
-    status: 'connected',
-    createdAt: '2026-10-28T14:30:00.000Z',
-    connectedAt: '2026-10-28T14:32:00.000Z',
-    requestType: 'invite',
-    inviteCode: 'PT-GW-821'
-  },
-  {
-    connectionId: 'conn-demo-3',
-    patientId: 'patient-3',
-    patientName: '박서연',
-    therapistId: 'acc-therapist-01',
-    therapistName: '박건우 PT',
-    status: 'connected',
-    createdAt: '2026-10-29T11:25:00.000Z',
-    connectedAt: '2026-10-29T11:30:00.000Z',
-    requestType: 'code',
-    inviteCode: 'PT-GW-821'
-  }
-];
+const DEMO_PATIENT_IDS = new Set([
+  'patient-1',
+  'patient-2',
+  'patient-3',
+  'acc-patient-01',
+  'acc-patient-02',
+  'acc-patient-03'
+]);
 
-// Initial demo support inquiries
-const INITIAL_INQUIRIES: SupportInquiry[] = [
-  {
-    id: 'inq-1',
-    authorName: '이지훈',
-    authorRole: 'patient',
-    authorUsername: 'patient02',
-    type: '문의',
-    title: '의자에서 일어서기 운동 시 무릎 부담 문의',
-    content: '의자에서 일어설 때 오른쪽 무릎에 가벼운 압박감이 느껴집니다. 의자 높이를 조금 높여서 진행해도 괜찮을까요?',
-    status: 'pending',
-    createdAt: '2026-11-01T14:20:00.000Z'
-  },
-  {
-    id: 'inq-2',
-    authorName: '박건우 (물리치료사)',
-    authorRole: 'therapist',
-    authorUsername: 'therapist01',
-    type: '기능제안',
-    title: '신규 고관절 회전 재활운동 종목 추가 제안',
-    content: '고관절 충돌증후군 대상자를 위한 내회전/외회전 등척성 운동 가이드 영상을 추가 요청드립니다.',
-    status: 'resolved',
-    createdAt: '2026-10-30T10:00:00.000Z',
-    adminReply: '임상 라이브러리 검토 후 차기 업데이트에 반영 예정입니다. 소중한 의견 감사합니다.'
-  }
-];
+const DEMO_CONNECTION_IDS = new Set([
+  'conn-demo-1',
+  'conn-demo-2',
+  'conn-demo-3'
+]);
 
-// Initial demo connection requests
-const INITIAL_CONNECTION_REQUESTS: ConnectionRequest[] = [
-  {
-    id: 'req-demo-1',
-    patientId: 'patient-3',
-    patientName: '박서연',
-    therapistId: 'acc-therapist-01',
-    therapistName: '박건우 PT',
-    status: 'accepted',
-    requestedAt: '2026-10-29T11:25:00.000Z',
-    respondedAt: '2026-10-29T11:30:00.000Z'
-  }
-];
+const DEMO_REQUEST_IDS = new Set(['req-demo-1']);
+const DEMO_LOG_IDS = new Set(['log-1', 'log-2', 'log-3', 'log-4', 'log-5', 'log-6']);
+const DEMO_SUBMISSION_IDS = new Set(['sub-demo-1']);
+const DEMO_INQUIRY_IDS = new Set(['inq-1', 'inq-2']);
+
+function isDemoPatientId(id?: string | null): boolean {
+  if (!id) return false;
+  const trimmed = id.trim();
+  return DEMO_PATIENT_IDS.has(trimmed) || trimmed.startsWith('patient-demo-');
+}
 
 // Custom event for cross-component reactive updates in the same tab
 const REHAB_STORAGE_EVENT = 'rehab_storage_changed';
@@ -174,7 +105,7 @@ export const StorageService = {
       localStorage.setItem(ACTIVE_ROLE_KEY, 'patient');
     }
     if (!localStorage.getItem(ACTIVE_PATIENT_ID_KEY)) {
-      localStorage.setItem(ACTIVE_PATIENT_ID_KEY, 'patient-1');
+      localStorage.setItem(ACTIVE_PATIENT_ID_KEY, '');
     }
     if (!localStorage.getItem(CONNECTION_REQUESTS_KEY)) {
       localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(INITIAL_CONNECTION_REQUESTS));
@@ -188,7 +119,6 @@ export const StorageService = {
     if (!localStorage.getItem(EXERCISES_KEY)) {
       localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
     } else {
-      // Auto-migrate if stored exercises do not have bodyParts or new exercises
       try {
         const stored = JSON.parse(localStorage.getItem(EXERCISES_KEY) || '[]');
         if (stored.length < EXERCISE_LIBRARY.length || !stored[0]?.bodyParts) {
@@ -201,20 +131,164 @@ export const StorageService = {
     if (!localStorage.getItem(VIDEO_SUBMISSIONS_KEY)) {
       localStorage.setItem(VIDEO_SUBMISSIONS_KEY, JSON.stringify(INITIAL_VIDEO_SUBMISSIONS));
     }
+
+    // 기존 브라우저 localStorage에 남아 있을 수 있는 시연용 데이터만 안전하게 선별 정리 (실제 Firebase UID 데이터 보존)
+    this.cleanupLegacyDemoStorage();
   },
 
-  resetAllData() {
+  /**
+   * localStorage 내 명시적으로 식별된 시연용 데이터만 선별 정리합니다.
+   * - localStorage.clear() / sessionStorage.clear()는 절대 사용하지 않습니다.
+   * - 실제 Firebase UID를 가진 환자/치료사 레코드는 100% 보존하며, 시연용 치료사 참조 필드만 안전하게 초기화합니다.
+   */
+  cleanupLegacyDemoStorage() {
     if (typeof window === 'undefined') return;
-    localStorage.setItem(PATIENTS_KEY, JSON.stringify(INITIAL_PATIENTS));
-    localStorage.setItem(WORKOUT_LOGS_KEY, JSON.stringify(INITIAL_WORKOUT_LOGS));
-    localStorage.setItem(ACTIVE_ROLE_KEY, 'patient');
-    localStorage.setItem(ACTIVE_PATIENT_ID_KEY, 'patient-1');
-    localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(INITIAL_CONNECTION_REQUESTS));
-    localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(INITIAL_CONNECTIONS));
-    localStorage.setItem(INQUIRIES_KEY, JSON.stringify(INITIAL_INQUIRIES));
-    localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
-    localStorage.setItem(VIDEO_SUBMISSIONS_KEY, JSON.stringify(INITIAL_VIDEO_SUBMISSIONS));
-    emitChange();
+
+    // 1. rehab_active_patient_id_v1에 데모 환자 ID가 남아 있으면 빈 문자열로 정리
+    const activePid = localStorage.getItem(ACTIVE_PATIENT_ID_KEY);
+    if (activePid && isDemoPatientId(activePid)) {
+      localStorage.setItem(ACTIVE_PATIENT_ID_KEY, '');
+    }
+
+    // 2. rehab_patients_v1: 데모 환자(patient-1~3 등) 제거, 실제 환자에 남은 시연용 치료사 참조만 초기화
+    try {
+      const rawPatients = localStorage.getItem(PATIENTS_KEY);
+      if (rawPatients) {
+        const parsed = JSON.parse(rawPatients);
+        if (Array.isArray(parsed)) {
+          let modified = false;
+          const cleanedPatients: Patient[] = [];
+          for (const p of parsed as Patient[]) {
+            if (!p || isDemoPatientId(p.id)) {
+              modified = true;
+              continue;
+            }
+            const nextP: Patient = { ...p };
+            if (nextP.therapistId && isLegacyDemoIdentifier(nextP.therapistId)) {
+              nextP.therapistId = undefined;
+              nextP.therapistName = undefined;
+              if (nextP.connectionStatus === 'connected') {
+                nextP.connectionStatus = 'not_connected';
+              }
+              modified = true;
+            }
+            if (nextP.requestedTherapistId && isLegacyDemoIdentifier(nextP.requestedTherapistId)) {
+              nextP.requestedTherapistId = undefined;
+              nextP.requestedTherapistName = undefined;
+              if (nextP.connectionStatus === 'pending' || nextP.connectionStatus === 'requested') {
+                nextP.connectionStatus = 'not_connected';
+              }
+              modified = true;
+            }
+            cleanedPatients.push(nextP);
+          }
+          if (modified) {
+            localStorage.setItem(PATIENTS_KEY, JSON.stringify(cleanedPatients));
+          }
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+
+    // 3. rehab_workout_logs_v1: 시연용 로그(log-1~6 또는 데모 환자 ID)만 제거
+    try {
+      const rawLogs = localStorage.getItem(WORKOUT_LOGS_KEY);
+      if (rawLogs) {
+        const parsed = JSON.parse(rawLogs);
+        if (Array.isArray(parsed)) {
+          const filtered = (parsed as WorkoutLog[]).filter(
+            (l) => l && !DEMO_LOG_IDS.has(l.id) && !isDemoPatientId(l.patientId)
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem(WORKOUT_LOGS_KEY, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. rehab_connections_v1: 시연용 연결(conn-demo-1~3, 데모 환자/치료사 참조)만 제거
+    try {
+      const rawConns = localStorage.getItem(CONNECTIONS_KEY);
+      if (rawConns) {
+        const parsed = JSON.parse(rawConns);
+        if (Array.isArray(parsed)) {
+          const filtered = (parsed as PatientTherapistConnection[]).filter(
+            (c) =>
+              c &&
+              !DEMO_CONNECTION_IDS.has(c.connectionId) &&
+              !isDemoPatientId(c.patientId) &&
+              !isLegacyDemoIdentifier(c.therapistId) &&
+              !isLegacyDemoIdentifier(c.inviteCode)
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 5. rehab_connection_requests_v1: 시연용 연결 요청(req-demo-1, 데모 환자/치료사 참조)만 제거
+    try {
+      const rawReqs = localStorage.getItem(CONNECTION_REQUESTS_KEY);
+      if (rawReqs) {
+        const parsed = JSON.parse(rawReqs);
+        if (Array.isArray(parsed)) {
+          const filtered = (parsed as ConnectionRequest[]).filter(
+            (r) =>
+              r &&
+              !DEMO_REQUEST_IDS.has(r.id) &&
+              !isDemoPatientId(r.patientId) &&
+              !isLegacyDemoIdentifier(r.therapistId)
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 6. rehab_video_submissions_v1: 시연용 영상 제출(sub-demo-1, 데모 환자)만 제거
+    try {
+      const rawSubs = localStorage.getItem(VIDEO_SUBMISSIONS_KEY);
+      if (rawSubs) {
+        const parsed = JSON.parse(rawSubs);
+        if (Array.isArray(parsed)) {
+          const filtered = (parsed as PatientVideoSubmission[]).filter(
+            (s) => s && !DEMO_SUBMISSION_IDS.has(s.id) && !isDemoPatientId(s.patientId)
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem(VIDEO_SUBMISSIONS_KEY, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 7. rehab_inquiries_v1: 시연용 문의(inq-1~2, 데모 작성자)만 제거
+    try {
+      const rawInq = localStorage.getItem(INQUIRIES_KEY);
+      if (rawInq) {
+        const parsed = JSON.parse(rawInq);
+        if (Array.isArray(parsed)) {
+          const filtered = (parsed as SupportInquiry[]).filter(
+            (i) => i && !DEMO_INQUIRY_IDS.has(i.id) && !isLegacyDemoIdentifier(i.authorUsername)
+          );
+          if (filtered.length !== parsed.length) {
+            localStorage.setItem(INQUIRIES_KEY, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
   },
 
   // Active Role & Patient
@@ -231,13 +305,19 @@ export const StorageService = {
   },
 
   getActivePatientId(): string {
-    if (typeof window === 'undefined') return 'patient-1';
-    return localStorage.getItem(ACTIVE_PATIENT_ID_KEY) || 'patient-1';
+    if (typeof window === 'undefined') return '';
+    const stored = localStorage.getItem(ACTIVE_PATIENT_ID_KEY) || '';
+    if (isDemoPatientId(stored)) return '';
+    return stored;
   },
 
   setActivePatientId(patientId: string) {
     if (typeof window === 'undefined') return;
-    localStorage.setItem(ACTIVE_PATIENT_ID_KEY, patientId);
+    if (isDemoPatientId(patientId)) {
+      localStorage.setItem(ACTIVE_PATIENT_ID_KEY, '');
+    } else {
+      localStorage.setItem(ACTIVE_PATIENT_ID_KEY, patientId);
+    }
     emitChange();
   },
 
@@ -273,30 +353,28 @@ export const StorageService = {
     if (typeof window === 'undefined') return INITIAL_PATIENTS;
     try {
       const data = localStorage.getItem(PATIENTS_KEY);
-      return data ? JSON.parse(data) : INITIAL_PATIENTS;
+      const list: Patient[] = data ? JSON.parse(data) : INITIAL_PATIENTS;
+      return list.filter((p) => p && !isDemoPatientId(p.id));
     } catch {
       return INITIAL_PATIENTS;
     }
   },
 
   getPatientById(patientId: string): Patient | undefined {
+    if (!patientId || isDemoPatientId(patientId)) return undefined;
     const patients = this.getPatients();
     return patients.find((p) => p.id === patientId);
   },
 
   /**
-   * 물리치료사별 환자 데이터 격리 조회
-   * - 연결되지 않은 다른 치료사의 환자 정보는 조회 불가!
-   * - 박건우 PT(therapist01)는 가상 데모 환자 + 자신에게 연결된 환자 조회
-   * - 신규 치료사는 자신에게 연결된 환자만 조회 (환자가 아직 없으면 안전한 가상 실습용 템플릿만 표시)
+   * 물리치료사별 담당 환자 목록 조회
+   * - 오직 현재 치료사(therapistUser.id)와 실제 승인('connected')된 환자만 반환합니다.
    */
   getPatientsForTherapist(therapistUser?: AuthUser): Patient[] {
     const allPatients = this.getPatients();
-    if (!therapistUser) return allPatients;
+    if (!therapistUser) return [];
 
-    const isPrimaryDemoTherapist = therapistUser.username === 'therapist01' || therapistUser.id === 'acc-therapist-01';
-
-    // 해당 치료사의 연결 테이블 데이터 조회
+    const therapistUid = therapistUser.therapistId || therapistUser.id;
     const therapistConns = this.getConnectionsForTherapist(therapistUser);
     const connectedPatientIds = new Set(
       therapistConns
@@ -311,41 +389,25 @@ export const StorageService = {
     );
 
     return allPatients.filter((patient) => {
-      // 1. 환자 레코드 또는 연결 테이블에서 명시적으로 연결 해제된 환자는 절대 제외
+      if (isDemoPatientId(patient.id)) return false;
       if (patient.connectionStatus === 'disconnected' || explicitlyDisconnectedPatientIds.has(patient.id)) {
         return false;
       }
       if (patient.connectionStatus !== 'connected') {
         return false;
       }
-
-      // 2. 연결 테이블에 현재 활성(connected) 상태로 등록된 환자
       if (connectedPatientIds.has(patient.id)) {
         return true;
       }
-
-      // 3. 환자 레코드의 therapistId가 현재 치료사와 일치하는 경우
-      if (
-        patient.therapistId === therapistUser.id || 
-        patient.therapistId === therapistUser.username ||
-        (isPrimaryDemoTherapist && (patient.therapistId === 'acc-therapist-01' || patient.therapistId === 'therapist-1'))
-      ) {
+      if (patient.therapistId && (patient.therapistId === therapistUid || patient.therapistId === therapistUser.id)) {
         return true;
       }
-
-      // 4. 박건우 PT인 경우 초기 데모 환자 3명 (연결 해제되지 않은 상태일 때만)
-      if (
-        isPrimaryDemoTherapist &&
-        (patient.id === 'patient-1' || patient.id === 'patient-2' || patient.id === 'patient-3')
-      ) {
-        return true;
-      }
-
       return false;
     });
   },
 
   addPatient(newPatient: Patient): boolean {
+    if (!newPatient || isDemoPatientId(newPatient.id)) return false;
     const patients = this.getPatients();
     if (patients.some((p) => p.id === newPatient.id)) {
       return false;
@@ -357,14 +419,21 @@ export const StorageService = {
   },
 
   // ==========================================
-  // 환자-물리치료사 연결 시스템 (Connection Flow - Firebase Ready)
+  // 환자-물리치료사 연결 시스템 (Firestore 기반)
   // ==========================================
 
   getConnections(): PatientTherapistConnection[] {
     if (typeof window === 'undefined') return INITIAL_CONNECTIONS;
     try {
       const data = localStorage.getItem(CONNECTIONS_KEY);
-      return data ? JSON.parse(data) : INITIAL_CONNECTIONS;
+      const conns: PatientTherapistConnection[] = data ? JSON.parse(data) : INITIAL_CONNECTIONS;
+      return conns.filter(
+        (c) =>
+          c &&
+          !DEMO_CONNECTION_IDS.has(c.connectionId) &&
+          !isDemoPatientId(c.patientId) &&
+          !isLegacyDemoIdentifier(c.therapistId)
+      );
     } catch {
       return INITIAL_CONNECTIONS;
     }
@@ -372,36 +441,31 @@ export const StorageService = {
 
   getConnectionsForTherapist(therapistUser?: AuthUser): PatientTherapistConnection[] {
     const conns = this.getConnections();
-    if (!therapistUser) return conns;
+    if (!therapistUser) return [];
+    const therapistUid = therapistUser.therapistId || therapistUser.id;
     return conns.filter(
-      (c) => c.therapistId === therapistUser.id || 
-             c.therapistId === therapistUser.username ||
-             (therapistUser.username === 'therapist01' && (c.therapistId === 'acc-therapist-01' || c.therapistId === 'therapist-1' || c.inviteCode === 'PT-GW-821'))
+      (c) => c.therapistId === therapistUser.id || (therapistUid && c.therapistId === therapistUid)
     );
   },
 
   getConnectionForPatient(patientId: string): PatientTherapistConnection | undefined {
+    if (!patientId || isDemoPatientId(patientId)) return undefined;
     const conns = this.getConnections();
     return conns.find((c) => c.patientId === patientId && (c.status === 'connected' || c.status === 'pending'));
   },
 
   getActiveConnection(patientId: string, therapistIdOrUser?: string | AuthUser): PatientTherapistConnection | undefined {
+    if (!patientId || isDemoPatientId(patientId)) return undefined;
     const conns = this.getConnections();
-    const therapistId = typeof therapistIdOrUser === 'object' ? therapistIdOrUser.id : therapistIdOrUser;
-    const username = typeof therapistIdOrUser === 'object' ? therapistIdOrUser.username : undefined;
+    const therapistId = typeof therapistIdOrUser === 'object'
+      ? (therapistIdOrUser.therapistId || therapistIdOrUser.id)
+      : therapistIdOrUser;
 
     return conns.find((c) => {
       if (c.patientId !== patientId) return false;
       if (c.status !== 'connected') return false;
-      if (!therapistId && !username) return true;
-      if (c.therapistId === therapistId || (username && c.therapistId === username)) return true;
-      if (
-        (therapistId === 'acc-therapist-01' || username === 'therapist01') &&
-        (c.therapistId === 'acc-therapist-01' || c.therapistId === 'therapist-1' || c.therapistId === 'therapist01')
-      ) {
-        return true;
-      }
-      return false;
+      if (!therapistId) return true;
+      return c.therapistId === therapistId;
     });
   },
 
@@ -418,11 +482,14 @@ export const StorageService = {
     const localConns = this.getConnections();
     const map = new Map<string, PatientTherapistConnection>();
     localConns.forEach((c) => map.set(c.connectionId, c));
-    remoteConns.forEach((c) => map.set(c.connectionId, c));
+    remoteConns.forEach((c) => {
+      if (!isDemoPatientId(c.patientId) && !isLegacyDemoIdentifier(c.therapistId)) {
+        map.set(c.connectionId, c);
+      }
+    });
     const merged = Array.from(map.values());
     localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(merged));
 
-    // 원격 연결 상태에 맞추어 로컬 connection requests도 동기화 (이미 승인된 연결은 대기 목록에서 제외)
     const requests = this.getConnectionRequests();
     let requestsChanged = false;
     remoteConns.forEach((rc) => {
@@ -462,7 +529,6 @@ export const StorageService = {
     const requests = this.getConnectionRequests();
     let changed = false;
 
-    // 현재 이미 연결된 환자 ID 집합 식별
     const connections = this.getConnections();
     const connectedPatientIds = new Set(
       connections.filter((c) => c.status === 'connected').map((c) => c.patientId)
@@ -471,14 +537,17 @@ export const StorageService = {
     patients.filter((p) => p.connectionStatus === 'connected').forEach((p) => connectedPatientIds.add(p.id));
 
     pendingConns.forEach((c) => {
-      // 이미 연결된 환자는 대기 목록에 추가하지 않음
-      if (connectedPatientIds.has(c.patientId)) {
+      if (
+        connectedPatientIds.has(c.patientId) ||
+        isDemoPatientId(c.patientId) ||
+        isLegacyDemoIdentifier(c.therapistId)
+      ) {
         return;
       }
       const canonicalDocId = (c.connectionId ? c.connectionId.replace(/^req-/, '') : '') || `${c.patientId}_${c.therapistId}`;
       const expectedReqId = `req-${canonicalDocId}`;
       const existingReq = requests.find(
-        (r) => r.patientId === c.patientId && (r.therapistId === c.therapistId || r.therapistId === c.therapistName) && r.status === 'pending'
+        (r) => r.patientId === c.patientId && r.therapistId === c.therapistId && r.status === 'pending'
       );
       if (existingReq) {
         if (existingReq.id !== expectedReqId || existingReq.therapistId !== c.therapistId) {
@@ -509,7 +578,14 @@ export const StorageService = {
     if (typeof window === 'undefined') return INITIAL_CONNECTION_REQUESTS;
     try {
       const data = localStorage.getItem(CONNECTION_REQUESTS_KEY);
-      return data ? JSON.parse(data) : INITIAL_CONNECTION_REQUESTS;
+      const reqs: ConnectionRequest[] = data ? JSON.parse(data) : INITIAL_CONNECTION_REQUESTS;
+      return reqs.filter(
+        (r) =>
+          r &&
+          !DEMO_REQUEST_IDS.has(r.id) &&
+          !isDemoPatientId(r.patientId) &&
+          !isLegacyDemoIdentifier(r.therapistId)
+      );
     } catch {
       return INITIAL_CONNECTION_REQUESTS;
     }
@@ -517,14 +593,11 @@ export const StorageService = {
 
   getRequestsForTherapist(therapistUser?: AuthUser): ConnectionRequest[] {
     const requests = this.getConnectionRequests();
-    if (!therapistUser) return requests;
+    if (!therapistUser) return [];
 
-    const therapistIds = new Set([
-      therapistUser.id,
-      therapistUser.username,
-      ...(therapistUser.username === 'therapist01' ? ['acc-therapist-01', 'PT-GW-821'] : []),
-      ...(therapistUser.connectionCode ? [therapistUser.connectionCode] : [])
-    ]);
+    const therapistIds = new Set<string>([therapistUser.id]);
+    if (therapistUser.therapistId) therapistIds.add(therapistUser.therapistId);
+    if (therapistUser.connectionCode) therapistIds.add(therapistUser.connectionCode);
 
     // 1. 이미 승인/연결된 환자 ID 집합 식별
     const connections = this.getConnections();
@@ -535,7 +608,7 @@ export const StorageService = {
     );
     const patients = this.getPatients();
     patients
-      .filter((p) => p.connectionStatus === 'connected' && (p.therapistId && therapistIds.has(p.therapistId)))
+      .filter((p) => p.connectionStatus === 'connected' && p.therapistId && therapistIds.has(p.therapistId))
       .forEach((p) => connectedPatientIds.add(p.id));
 
     // 2. 해당 치료사 대상 요청 필터링
@@ -546,10 +619,8 @@ export const StorageService = {
     const sanitizedRequests: ConnectionRequest[] = [];
     let requestsModified = false;
 
-    // 최신 요청부터 순회
     for (const req of therapistRequests) {
       if (connectedPatientIds.has(req.patientId)) {
-        // 이미 연결된 환자의 대기 요청은 자동으로 accepted 처리
         if (req.status === 'pending') {
           req.status = 'accepted';
           requestsModified = true;
@@ -558,7 +629,6 @@ export const StorageService = {
       }
       if (req.status === 'pending') {
         if (seenPatients.has(req.patientId)) {
-          // 중복 요청 방지: 이미 본 환자의 이전 대기 요청은 건너뜀
           continue;
         }
         seenPatients.add(req.patientId);
@@ -575,7 +645,7 @@ export const StorageService = {
 
   /**
    * 환자가 치료사 고유 연결 코드 또는 초대 링크로 연결 요청 전송
-   * - Firestore connections 컬렉션에 실제 저장 성공 시에만 완료 처리 (Requirement 1, 2)
+   * - 실제 Firebase UID를 가진 물리치료사에게만 전송 가능하며, Firestore connections 컬렉션 저장 성공 시에만 완료 처리
    */
   async sendConnectionRequest(
     patientId: string,
@@ -583,6 +653,18 @@ export const StorageService = {
     therapistAccount: UserAccount,
     requestType: 'code' | 'invite' = 'code'
   ): Promise<{ success: boolean; message: string; connection?: PatientTherapistConnection }> {
+    const targetTherapistUid = therapistAccount?.therapistId || therapistAccount?.id;
+    if (
+      !targetTherapistUid ||
+      isLegacyDemoIdentifier(targetTherapistUid) ||
+      isLegacyDemoIdentifier(therapistAccount?.connectionCode)
+    ) {
+      return {
+        success: false,
+        message: '유효한 실제 물리치료사 계정을 찾을 수 없습니다. 담당 치료사의 실제 연결 코드를 확인해주세요.'
+      };
+    }
+
     const patients = this.getPatients();
     const patientIndex = patients.findIndex((p) => p.id === patientId);
     if (patientIndex === -1) {
@@ -595,22 +677,20 @@ export const StorageService = {
     }
 
     const requests = this.getConnectionRequests();
-    // 중복 대기 요청 방지
     const hasPending = requests.some(
-      (r) => r.patientId === patientId && (r.therapistId === therapistAccount.id || r.therapistId === therapistAccount.username) && r.status === 'pending'
+      (r) => r.patientId === patientId && r.therapistId === targetTherapistUid && r.status === 'pending'
     );
     if (hasPending) {
       return { success: false, message: '이미 해당 물리치료사에게 보낸 연결 요청이 대기 중입니다.' };
     }
 
     const nowStr = new Date().toISOString();
-
-    const canonicalConnectionId = `${patientId}_${therapistAccount.id}`;
+    const canonicalConnectionId = `${patientId}_${targetTherapistUid}`;
     const newConnection: PatientTherapistConnection = {
       connectionId: canonicalConnectionId,
       patientId,
       patientName,
-      therapistId: therapistAccount.id,
+      therapistId: targetTherapistUid,
       therapistName: therapistAccount.name,
       status: 'pending',
       requestedBy: 'patient',
@@ -619,7 +699,6 @@ export const StorageService = {
       inviteCode: therapistAccount.connectionCode
     };
 
-    // Cloud Firestore 연결 관계 실제 저장 (Requirement 1, 2)
     if (isFirebaseConfigured()) {
       try {
         const saved = await FirebaseService.saveConnection(newConnection);
@@ -631,9 +710,9 @@ export const StorageService = {
         }
       } catch (err: any) {
         console.error('Firestore saveConnection error:', err);
-        return { 
-          success: false, 
-          message: `Firestore 연결 요청 저장 실패: ${err?.message || '보안 규칙 또는 권한 오류'}` 
+        return {
+          success: false,
+          message: `Firestore 연결 요청 저장 실패: ${err?.message || '보안 규칙 또는 권한 오류'}`
         };
       }
     }
@@ -642,7 +721,7 @@ export const StorageService = {
       id: `req-${canonicalConnectionId}`,
       patientId,
       patientName,
-      therapistId: therapistAccount.id,
+      therapistId: targetTherapistUid,
       therapistName: therapistAccount.name,
       status: 'pending',
       requestedAt: nowStr
@@ -650,24 +729,22 @@ export const StorageService = {
 
     localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify([newRequest, ...requests]));
 
-    // 환자 프로필에 'pending' 상태와 요청 대상 치료사 정보 저장
     patients[patientIndex] = {
       ...currentPatient,
       connectionStatus: 'pending',
-      requestedTherapistId: therapistAccount.id,
+      requestedTherapistId: targetTherapistUid,
       requestedTherapistName: therapistAccount.name
     };
     localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
 
-    // 독립 연결 데이터베이스(rehab_connections_v1)에도 저장
     const connections = this.getConnections();
-    const filteredConns = connections.filter((c) => !(c.patientId === patientId && c.therapistId === therapistAccount.id));
+    const filteredConns = connections.filter((c) => !(c.patientId === patientId && c.therapistId === targetTherapistUid));
     localStorage.setItem(CONNECTIONS_KEY, JSON.stringify([newConnection, ...filteredConns]));
 
     emitChange();
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: `${therapistAccount.name} 님에게 연결 요청을 전송했습니다. 치료사의 승인 후 운동 처방이 활성화됩니다.`,
       connection: newConnection
     };
@@ -675,10 +752,7 @@ export const StorageService = {
 
   /**
    * 물리치료사가 연결 요청 수락 또는 거절
-  /**
-   * 물리치료사가 연결 요청 수락 또는 거절
    * - Firestore 실제 connections 문서 조회를 기반으로 권한(therapistId == auth.uid) 및 상태 검증
-   * - 로컬 캐시를 최종 권한 판단 근거로 사용하지 않음
    * - Firestore 업데이트 성공 이후에만 로컬 캐시와 UI 상태 갱신
    */
   async respondConnectionRequest(
@@ -695,327 +769,263 @@ export const StorageService = {
     const targetReq = reqIndex !== -1 ? requests[reqIndex] : null;
 
     const nowStr = new Date().toISOString();
-    const isDemoTherapist = AuthService.isPureDemoAccount(therapistUser);
-    const authUid = isFirebaseConfigured() && !isDemoTherapist
-      ? await waitForFirebaseAuthUid()
-      : getFirebaseAuth()?.currentUser?.uid;
+    const authUid = await waitForFirebaseAuthUid();
     const currentTherapistName = therapistUser?.name || '담당 물리치료사';
     const effectiveTherapistId = therapistUser?.therapistId || therapistUser?.id || authUid;
 
-    // 1. Firebase 연동 환경(순수 데모 계정이 아닌 실제 계정)인 경우: 실제 Firestore connections 문서 기반 검증
-    if (isFirebaseConfigured() && !isDemoTherapist) {
-      if (!authUid) {
-        return {
-          success: false,
-          message: '인증된 물리치료사 계정 정보를 확인할 수 없습니다. 다시 로그인해 주세요.'
-        };
+    if (!authUid) {
+      return {
+        success: false,
+        message: '인증된 물리치료사 계정 정보를 확인할 수 없습니다. 다시 로그인해 주세요.'
+      };
+    }
+
+    if (effectiveTherapistId && authUid !== effectiveTherapistId) {
+      return {
+        success: false,
+        message: `인증 세션 불일치가 감지되었습니다. (Firebase 인증 UID: ${authUid.substring(0, 8)}..., 현재 로그인 치료사 UID: ${effectiveTherapistId.substring(0, 8)}...). 로그아웃 후 다시 로그인해 주세요.`
+      };
+    }
+
+    let targetDocId = '';
+    let firestoreConn: PatientTherapistConnection | null = null;
+    let permissionErrorCaught = false;
+
+    const cleanReqId = requestId.startsWith('req-') ? requestId.replace(/^req-/, '') : requestId;
+    if (cleanReqId.includes('_')) {
+      try {
+        firestoreConn = await FirebaseService.getConnectionDoc(cleanReqId);
+        if (firestoreConn) {
+          targetDocId = cleanReqId;
+        }
+      } catch (err: any) {
+        if (err?.code === 'permission-denied') {
+          permissionErrorCaught = true;
+        }
+        console.warn('getConnectionDoc direct lookup error:', err);
       }
+    }
 
-      // 세션 불일치 감지: Firebase Auth 계정과 현재 활성 UI 치료사 세션의 UID가 다른 경우 차단
-      if (effectiveTherapistId && authUid !== effectiveTherapistId) {
-        return {
-          success: false,
-          message: `인증 세션 불일치가 감지되었습니다. (Firebase 인증 UID: ${authUid.substring(0, 8)}..., 현재 로그인 치료사 UID: ${effectiveTherapistId.substring(0, 8)}...). 로그아웃 후 다시 로그인해 주세요.`
-        };
-      }
-
-      // 실제 Firestore connections 문서 ID 및 데이터 탐색
-      let targetDocId = '';
-      let firestoreConn: PatientTherapistConnection | null = null;
-      let permissionErrorCaught = false;
-
-      // 1) requestId 자체에 이미 실제 문서 ID가 포함되어 있는지 확인 (ex. req-patientUid_therapistUid)
-      const cleanReqId = requestId.startsWith('req-') ? requestId.replace(/^req-/, '') : requestId;
-      if (cleanReqId.includes('_')) {
+    if (!firestoreConn) {
+      const localConnections = this.getConnections();
+      const matchedLocalConn = localConnections.find(
+        (c) =>
+          c.connectionId === cleanReqId ||
+          (targetReq?.patientId && c.patientId === targetReq.patientId && (c.therapistId === authUid || c.therapistId === effectiveTherapistId))
+      );
+      if (matchedLocalConn?.connectionId && matchedLocalConn.connectionId !== cleanReqId) {
         try {
-          firestoreConn = await FirebaseService.getConnectionDoc(cleanReqId);
+          firestoreConn = await FirebaseService.getConnectionDoc(matchedLocalConn.connectionId);
           if (firestoreConn) {
-            targetDocId = cleanReqId;
+            targetDocId = matchedLocalConn.connectionId;
           }
         } catch (err: any) {
           if (err?.code === 'permission-denied') {
             permissionErrorCaught = true;
           }
-          console.warn('getConnectionDoc direct lookup error:', err);
         }
       }
+    }
 
-      // 2) 로컬 connections에 저장된 원격 connectionId 확인
-      if (!firestoreConn) {
-        const localConnections = this.getConnections();
-        const matchedLocalConn = localConnections.find(
-          (c) => c.connectionId === cleanReqId || (targetReq?.patientId && c.patientId === targetReq.patientId && (c.therapistId === authUid || c.therapistId === effectiveTherapistId))
+    const patientIdForQuery = targetReq?.patientId || (cleanReqId.includes('_') ? cleanReqId.split('_')[0] : '');
+    const therapistIdForQuery = authUid;
+
+    if (!firestoreConn && patientIdForQuery && therapistIdForQuery) {
+      try {
+        const found = await FirebaseService.findConnectionDocByTherapistAndPatient(
+          therapistIdForQuery,
+          patientIdForQuery
         );
-        if (matchedLocalConn?.connectionId && matchedLocalConn.connectionId !== cleanReqId) {
-          try {
-            firestoreConn = await FirebaseService.getConnectionDoc(matchedLocalConn.connectionId);
-            if (firestoreConn) {
-              targetDocId = matchedLocalConn.connectionId;
-            }
-          } catch (err: any) {
-            if (err?.code === 'permission-denied') {
-              permissionErrorCaught = true;
-            }
-          }
+        if (found) {
+          targetDocId = found.docId;
+          firestoreConn = found.connection;
         }
-      }
-
-      // 3) 환자 ID와 인증된 치료사 UID로 실제 Firestore 문서 조회 (canonical ID 및 where 쿼리 탐색)
-      const patientIdForQuery = targetReq?.patientId || (cleanReqId.includes('_') ? cleanReqId.split('_')[0] : '');
-      const therapistIdForQuery = authUid;
-
-      if (!firestoreConn && patientIdForQuery && therapistIdForQuery) {
-        try {
-          const found = await FirebaseService.findConnectionDocByTherapistAndPatient(
-            therapistIdForQuery,
-            patientIdForQuery
-          );
-          if (found) {
-            targetDocId = found.docId;
-            firestoreConn = found.connection;
-          }
-        } catch (err: any) {
-          if (err?.code === 'permission-denied') {
-            permissionErrorCaught = true;
-          }
-          console.warn('findConnectionDocByTherapistAndPatient error:', err);
+      } catch (err: any) {
+        if (err?.code === 'permission-denied') {
+          permissionErrorCaught = true;
         }
+        console.warn('findConnectionDocByTherapistAndPatient error:', err);
       }
+    }
 
-      // 요구사항 7: 권한 부족(permission-denied)과 문서 미존재(not_found) 명확 구분
-      if (permissionErrorCaught && !firestoreConn) {
-        return {
-          success: false,
-          message: `Firestore 접근 권한이 없습니다 (permission-denied). 로그인된 치료사 계정(UID: ${authUid.substring(0, 8)}...)이 해당 연결의 담당 치료사인지 확인해 주세요.`
-        };
-      }
+    if (permissionErrorCaught && !firestoreConn) {
+      return {
+        success: false,
+        message: `Firestore 접근 권한이 없습니다 (permission-denied). 로그인된 치료사 계정(UID: ${authUid.substring(0, 8)}...)이 해당 연결의 담당 치료사인지 확인해 주세요.`
+      };
+    }
 
-      if (!firestoreConn) {
-        return {
-          success: false,
-          message: 'Firestore에서 해당 연결 요청 문서를 찾을 수 없습니다 (not_found). 환자가 보낸 연결 요청이 취소되었거나 삭제되었을 수 있습니다.'
-        };
-      }
+    if (!firestoreConn) {
+      return {
+        success: false,
+        message: 'Firestore에서 해당 연결 요청 문서를 찾을 수 없습니다 (not_found). 환자가 보낸 연결 요청이 취소되었거나 삭제되었을 수 있습니다.'
+      };
+    }
 
-      // 요구사항 6: Firestore 문서의 therapistId와 auth.currentUser.uid 비교
-      if (firestoreConn.therapistId !== authUid) {
-        return {
-          success: false,
-          message: '자신에게 요청된 연결만 수락하거나 거절할 수 있습니다.'
-        };
-      }
+    if (firestoreConn.therapistId !== authUid) {
+      return {
+        success: false,
+        message: '자신에게 요청된 연결만 수락하거나 거절할 수 있습니다.'
+      };
+    }
 
-      // 요구사항 C: 실제 요청 상태가 pending인지 검증
-      if (firestoreConn.status !== 'pending') {
-        if (firestoreConn.status === 'connected') {
-          // 이미 승인된 연결: 로컬 캐시 동기화 후 완료 안내
-          if (targetReq && reqIndex !== -1) {
-            requests[reqIndex] = { ...targetReq, status: 'accepted', respondedAt: nowStr };
-            localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(requests));
-            emitChange();
-          }
-          return {
-            success: true,
-            message: `${firestoreConn.patientName || targetReq?.patientName || '환자'} 환자는 이미 연결되어 있습니다. 담당 환자 목록에서 확인하실 수 있습니다.`
-          };
+    if (firestoreConn.status !== 'pending') {
+      if (firestoreConn.status === 'connected') {
+        if (targetReq && reqIndex !== -1) {
+          requests[reqIndex] = { ...targetReq, status: 'accepted', respondedAt: nowStr };
+          localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(requests));
+          emitChange();
         }
         return {
-          success: false,
-          message: firestoreConn.status === 'rejected'
-            ? '이미 거절된 연결 요청입니다.'
-            : firestoreConn.status === 'disconnected'
-              ? '이미 해제된 연결입니다.'
-              : '이미 처리된 연결 요청입니다.'
+          success: true,
+          message: `${firestoreConn.patientName || targetReq?.patientName || '환자'} 환자는 이미 연결되어 있습니다. 담당 환자 목록에서 확인하실 수 있습니다.`
         };
       }
+      return {
+        success: false,
+        message: firestoreConn.status === 'rejected'
+          ? '이미 거절된 연결 요청입니다.'
+          : firestoreConn.status === 'disconnected'
+            ? '이미 해제된 연결입니다.'
+            : '이미 처리된 연결 요청입니다.'
+      };
+    }
 
-      // 요구사항 C: 수락/거절 업데이트 객체 준비 (동일한 실제 문서 ID 사용)
-      const connToUpdate: PatientTherapistConnection = {
-        ...firestoreConn,
-        connectionId: targetDocId,
+    const connToUpdate: PatientTherapistConnection = {
+      ...firestoreConn,
+      connectionId: targetDocId,
+      status: accept ? 'connected' : 'rejected',
+      connectedAt: accept ? nowStr : undefined,
+      rejectedAt: accept ? undefined : nowStr,
+      respondedAt: nowStr
+    };
+
+    try {
+      const saved = await FirebaseService.saveConnection(connToUpdate);
+      if (!saved) {
+        return {
+          success: false,
+          message: 'Firestore 연결 상태 업데이트에 실패했습니다. 권한 또는 네트워크를 확인해주세요.'
+        };
+      }
+    } catch (saveErr: any) {
+      console.error('Firestore saveConnection error in respondConnectionRequest:', saveErr);
+      let userFriendlyMsg = 'Firestore 연결 처리 중 오류가 발생했습니다.';
+      if (saveErr?.message?.includes('Missing or insufficient permissions') || saveErr?.message?.includes('permission-denied')) {
+        userFriendlyMsg = '해당 연결 요청을 처리할 수 있는 권한이 없습니다. 대상 물리치료사 계정으로 로그인되어 있는지 확인해주세요.';
+      }
+      return {
+        success: false,
+        message: userFriendlyMsg
+      };
+    }
+
+    const patientId = firestoreConn.patientId;
+    const patientName = firestoreConn.patientName || targetReq?.patientName || '환자';
+
+    const connections = this.getConnections();
+    const existingConnIdx = connections.findIndex(
+      (c) => c.patientId === patientId && c.therapistId === authUid
+    );
+    if (existingConnIdx !== -1) {
+      connections[existingConnIdx] = {
+        ...connections[existingConnIdx],
         status: accept ? 'connected' : 'rejected',
         connectedAt: accept ? nowStr : undefined,
         rejectedAt: accept ? undefined : nowStr,
         respondedAt: nowStr
       };
-
-      try {
-        const saved = await FirebaseService.saveConnection(connToUpdate);
-        if (!saved) {
-          return {
-            success: false,
-            message: 'Firestore 연결 상태 업데이트에 실패했습니다. 권한 또는 네트워크를 확인해주세요.'
-          };
-        }
-      } catch (saveErr: any) {
-        console.error('Firestore saveConnection error in respondConnectionRequest:', saveErr);
-        let userFriendlyMsg = 'Firestore 연결 처리 중 오류가 발생했습니다.';
-        if (saveErr?.message?.includes('Missing or insufficient permissions') || saveErr?.message?.includes('permission-denied')) {
-          userFriendlyMsg = '해당 연결 요청을 처리할 수 있는 권한이 없습니다. 대상 물리치료사 계정으로 로그인되어 있는지 확인해주세요.';
-        }
-        return {
-          success: false,
-          message: userFriendlyMsg
-        };
-      }
-
-      // 요구사항 C: Firestore 저장에 성공한 이후에만 로컬 캐시와 화면 갱신
-      const patientId = firestoreConn.patientId;
-      const patientName = firestoreConn.patientName || targetReq?.patientName || '환자';
-
-      // 1) 로컬 connections 동기화
-      const connections = this.getConnections();
-      const existingConnIdx = connections.findIndex(
-        (c) => c.patientId === patientId && c.therapistId === authUid
-      );
-      if (existingConnIdx !== -1) {
-        connections[existingConnIdx] = {
-          ...connections[existingConnIdx],
-          status: accept ? 'connected' : 'rejected',
-          connectedAt: accept ? nowStr : undefined,
-          rejectedAt: accept ? undefined : nowStr,
-          respondedAt: nowStr
-        };
-      } else {
-        connections.unshift(connToUpdate);
-      }
-      localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
-
-      // 2) 로컬 requests 동기화 (해당 환자의 모든 대기 요청을 상태에 맞게 일괄 갱신)
-      requests.forEach((r) => {
-        if (r.patientId === patientId && (r.therapistId === authUid || r.id === requestId || (r as any).connectionId === targetDocId)) {
-          r.status = accept ? 'accepted' : 'rejected';
-          r.respondedAt = nowStr;
-        }
-      });
-      localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(requests));
-
-      // 3) 환자 정보(rehab_patients_v1) 업데이트 (담당 환자 목록 반영)
-      const patients = this.getPatients();
-      const patientIndex = patients.findIndex((p) => p.id === patientId);
-      if (patientIndex !== -1) {
-        if (accept) {
-          patients[patientIndex] = {
-            ...patients[patientIndex],
-            connectionStatus: 'connected',
-            therapistId: authUid,
-            therapistName: currentTherapistName,
-            requestedTherapistId: undefined,
-            requestedTherapistName: undefined
-          };
-        } else {
-          patients[patientIndex] = {
-            ...patients[patientIndex],
-            connectionStatus: 'not_connected',
-            requestedTherapistId: undefined,
-            requestedTherapistName: undefined
-          };
-        }
-        localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
-      } else if (accept) {
-        let remoteProfile: Record<string, any> | null = null;
-        try {
-          remoteProfile = await FirebaseService.getUserProfile(patientId);
-        } catch (e) {
-          console.warn('getUserProfile on accept deferred:', e);
-        }
-        const newPatient: Patient = {
-          id: patientId,
-          name: remoteProfile?.name || patientName,
-          age: remoteProfile?.age || (firestoreConn as any).age || 30,
-          gender: remoteProfile?.gender || (firestoreConn as any).gender || '남성',
-          diagnosis: remoteProfile?.diagnosis || (firestoreConn as any).diagnosis || '',
-          targetGoal: remoteProfile?.targetGoal || (firestoreConn as any).targetGoal || '재활 목표',
-          therapistNotes: remoteProfile?.therapistNotes || (firestoreConn as any).therapistNotes || '',
-          assignedProgram: remoteProfile?.assignedProgram || [],
-          connectionStatus: 'connected',
-          therapistId: authUid,
-          therapistName: currentTherapistName,
-          feedbacks: remoteProfile?.feedbacks || []
-        };
-        patients.unshift(newPatient);
-        localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
-      }
-
-      // 4) 계정 테이블(rehab_accounts_v1) 및 세션 동기화
-      if (accept) {
-        try {
-          const accountsData = localStorage.getItem('rehab_accounts_v1');
-          if (accountsData) {
-            const accounts = JSON.parse(accountsData);
-            let accUpdated = false;
-            accounts.forEach((acc: any) => {
-              if (acc.patientId === patientId) {
-                acc.connectedTherapistId = authUid;
-                acc.connectedTherapistName = currentTherapistName;
-                accUpdated = true;
-              }
-            });
-            if (accUpdated) {
-              localStorage.setItem('rehab_accounts_v1', JSON.stringify(accounts));
-            }
-          }
-          if (typeof window !== 'undefined') {
-            const sessionData = sessionStorage.getItem('rehab_session_user_v1');
-            if (sessionData) {
-              const sessionUser = JSON.parse(sessionData);
-              if (sessionUser.patientId === patientId) {
-                sessionUser.connectedTherapistId = authUid;
-                sessionUser.connectedTherapistName = currentTherapistName;
-                sessionStorage.setItem('rehab_session_user_v1', JSON.stringify(sessionUser));
-              }
-            }
-            window.dispatchEvent(new CustomEvent('rehab_auth_state_changed'));
-          }
-        } catch (err) {
-          console.error('Account sync error on connection accept:', err);
-        }
-      }
-
-      emitChange();
-
-      return {
-        success: true,
-        message: accept
-          ? `${patientName} 환자의 연결 요청을 승인했습니다. 담당 환자 목록에 추가되었습니다.`
-          : `${patientName} 환자의 연결 요청을 거절했습니다.`
-      };
-    }
-
-    // 2. Demo / Firebase 미연동 로컬 환경 fallback
-    if (!targetReq) {
-      return { success: false, message: '연결 요청을 찾을 수 없습니다.' };
-    }
-
-    if (targetReq.status !== 'pending') {
-      return {
-        success: targetReq.status === 'accepted',
-        message: targetReq.status === 'accepted' ? '이미 승인 완료된 연결 요청입니다.' : '이미 처리된 연결 요청입니다.'
-      };
-    }
-
-    const currentTherapistId = therapistUser?.id || 'acc-therapist-01';
-    targetReq.status = accept ? 'accepted' : 'rejected';
-    targetReq.respondedAt = nowStr;
-    localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(requests));
-
-    const connections = this.getConnections();
-    const connIdx = connections.findIndex((c) => c.patientId === targetReq.patientId && c.therapistId === currentTherapistId);
-    if (connIdx !== -1) {
-      connections[connIdx].status = accept ? 'connected' : 'rejected';
-      connections[connIdx].connectedAt = accept ? nowStr : undefined;
-      connections[connIdx].rejectedAt = accept ? undefined : nowStr;
-      connections[connIdx].respondedAt = nowStr;
+    } else {
+      connections.unshift(connToUpdate);
     }
     localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
 
+    requests.forEach((r) => {
+      if (r.patientId === patientId && (r.therapistId === authUid || r.id === requestId || (r as any).connectionId === targetDocId)) {
+        r.status = accept ? 'accepted' : 'rejected';
+        r.respondedAt = nowStr;
+      }
+    });
+    localStorage.setItem(CONNECTION_REQUESTS_KEY, JSON.stringify(requests));
+
     const patients = this.getPatients();
-    const p = patients.find((pat) => pat.id === targetReq.patientId);
-    if (p) {
-      p.connectionStatus = accept ? 'connected' : 'not_connected';
-      p.therapistId = accept ? currentTherapistId : undefined;
-      p.therapistName = accept ? currentTherapistName : undefined;
+    const patientIndex = patients.findIndex((p) => p.id === patientId);
+    if (patientIndex !== -1) {
+      if (accept) {
+        patients[patientIndex] = {
+          ...patients[patientIndex],
+          connectionStatus: 'connected',
+          therapistId: authUid,
+          therapistName: currentTherapistName,
+          requestedTherapistId: undefined,
+          requestedTherapistName: undefined
+        };
+      } else {
+        patients[patientIndex] = {
+          ...patients[patientIndex],
+          connectionStatus: 'not_connected',
+          requestedTherapistId: undefined,
+          requestedTherapistName: undefined
+        };
+      }
       localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
+    } else if (accept) {
+      let remoteProfile: Record<string, any> | null = null;
+      try {
+        remoteProfile = await FirebaseService.getUserProfile(patientId);
+      } catch (e) {
+        console.warn('getUserProfile on accept deferred:', e);
+      }
+      const newPatient: Patient = {
+        id: patientId,
+        name: remoteProfile?.name || patientName,
+        age: remoteProfile?.age || (firestoreConn as any).age || 30,
+        gender: remoteProfile?.gender || (firestoreConn as any).gender || '남성',
+        diagnosis: remoteProfile?.diagnosis || (firestoreConn as any).diagnosis || '',
+        targetGoal: remoteProfile?.targetGoal || (firestoreConn as any).targetGoal || '재활 목표',
+        therapistNotes: remoteProfile?.therapistNotes || (firestoreConn as any).therapistNotes || '',
+        assignedProgram: remoteProfile?.assignedProgram || [],
+        connectionStatus: 'connected',
+        therapistId: authUid,
+        therapistName: currentTherapistName,
+        feedbacks: remoteProfile?.feedbacks || []
+      };
+      patients.unshift(newPatient);
+      localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
+    }
+
+    if (accept) {
+      try {
+        const accountsData = localStorage.getItem('rehab_accounts_v1');
+        if (accountsData) {
+          const accounts = JSON.parse(accountsData);
+          let accUpdated = false;
+          accounts.forEach((acc: any) => {
+            if (acc.patientId === patientId) {
+              acc.connectedTherapistId = authUid;
+              acc.connectedTherapistName = currentTherapistName;
+              accUpdated = true;
+            }
+          });
+          if (accUpdated) {
+            localStorage.setItem('rehab_accounts_v1', JSON.stringify(accounts));
+          }
+        }
+        if (typeof window !== 'undefined') {
+          const sessionData = sessionStorage.getItem('rehab_session_user_v1');
+          if (sessionData) {
+            const sessionUser = JSON.parse(sessionData);
+            if (sessionUser.patientId === patientId) {
+              sessionUser.connectedTherapistId = authUid;
+              sessionUser.connectedTherapistName = currentTherapistName;
+              sessionStorage.setItem('rehab_session_user_v1', JSON.stringify(sessionUser));
+            }
+          }
+          window.dispatchEvent(new CustomEvent('rehab_auth_state_changed'));
+        }
+      } catch (err) {
+        console.error('Account sync error on connection accept:', err);
+      }
     }
 
     emitChange();
@@ -1023,25 +1033,24 @@ export const StorageService = {
     return {
       success: true,
       message: accept
-        ? `${targetReq.patientName} 환자의 연결 요청을 승인했습니다.`
-        : `${targetReq.patientName} 환자의 연결 요청을 거절했습니다.`
+        ? `${patientName} 환자의 연결 요청을 승인했습니다. 담당 환자 목록에 추가되었습니다.`
+        : `${patientName} 환자의 연결 요청을 거절했습니다.`
     };
   },
 
   /**
    * 환자 또는 물리치료사가 연결 해제
-   * - connectionId 기준 처리 및 치료사 권한 일치 검증
-   * - 환자 레코드, 연결 테이블(rehab_connections_v1), 계정 테이블(rehab_accounts_v1) 및 세션 동시 갱신
    * - 기존 운동 수행 기록 및 운동 처방 이력은 100% 안전하게 보존됨
    */
   async disconnectPatient(
-    patientId: string, 
+    patientId: string,
     therapistIdOrUser?: string | AuthUser,
     explicitConnectionId?: string
   ): Promise<{ success: boolean; message: string; connectionId?: string }> {
     try {
-      const therapistId = typeof therapistIdOrUser === 'object' ? therapistIdOrUser.id : therapistIdOrUser;
-      const therapistUsername = typeof therapistIdOrUser === 'object' ? therapistIdOrUser.username : undefined;
+      const therapistId = typeof therapistIdOrUser === 'object'
+        ? (therapistIdOrUser.therapistId || therapistIdOrUser.id)
+        : therapistIdOrUser;
 
       const patients = this.getPatients();
       const patientIndex = patients.findIndex((p) => p.id === patientId);
@@ -1050,20 +1059,18 @@ export const StorageService = {
       }
       const patient = patients[patientIndex];
 
-      // 1. 연결 테이블(rehab_connections_v1)에서 대상 연결 정보 식별
       const connections = this.getConnections();
       let targetConnIndex = -1;
 
       if (explicitConnectionId) {
         targetConnIndex = connections.findIndex((c) => c.connectionId === explicitConnectionId);
       }
-      if (targetConnIndex === -1 && (therapistId || therapistUsername)) {
-        targetConnIndex = connections.findIndex((c) => 
-          c.patientId === patientId && 
-          (c.status === 'connected' || c.status === 'pending') &&
-          (c.therapistId === therapistId || c.therapistId === therapistUsername || 
-           ((therapistUsername === 'therapist01' || therapistId === 'acc-therapist-01') && 
-            (c.therapistId === 'acc-therapist-01' || c.therapistId === 'therapist-1' || c.therapistId === 'therapist01')))
+      if (targetConnIndex === -1 && therapistId) {
+        targetConnIndex = connections.findIndex(
+          (c) =>
+            c.patientId === patientId &&
+            (c.status === 'connected' || c.status === 'pending') &&
+            c.therapistId === therapistId
         );
       }
       if (targetConnIndex === -1) {
@@ -1082,12 +1089,16 @@ export const StorageService = {
           disconnectedAt: nowStr
         };
       } else {
-        connectionId = `conn-disc-${Date.now()}`;
+        const resolvedTherapistId = therapistId || patient.therapistId;
+        if (!resolvedTherapistId) {
+          return { success: false, message: '해제할 물리치료사 연결 정보를 확인할 수 없습니다.' };
+        }
+        connectionId = `${patientId}_${resolvedTherapistId}`;
         connections.unshift({
           connectionId,
           patientId,
           patientName: patient.name,
-          therapistId: therapistId || patient.therapistId || 'acc-therapist-01',
+          therapistId: resolvedTherapistId,
           therapistName: patient.therapistName || '담당 물리치료사',
           status: 'disconnected',
           createdAt: nowStr,
@@ -1097,7 +1108,6 @@ export const StorageService = {
       }
       localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
 
-      // Cloud Firestore 연결 해제 상태 동기화
       const targetConnRecord = connections[targetConnIndex !== -1 ? targetConnIndex : 0];
       if (targetConnRecord && isFirebaseConfigured()) {
         try {
@@ -1107,7 +1117,6 @@ export const StorageService = {
         }
       }
 
-      // 2. 환자 정보(rehab_patients_v1) 상태 변경
       patients[patientIndex] = {
         ...patient,
         connectionStatus: 'disconnected',
@@ -1118,7 +1127,6 @@ export const StorageService = {
       };
       localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
 
-      // 3. 계정 테이블(rehab_accounts_v1) 동기화
       try {
         const accountsData = localStorage.getItem('rehab_accounts_v1');
         if (accountsData) {
@@ -1139,7 +1147,6 @@ export const StorageService = {
         console.error('Account sync error on disconnect:', err);
       }
 
-      // 4. 세션 스토리지 환자 계정 동기화
       if (typeof window !== 'undefined') {
         try {
           const sessionData = sessionStorage.getItem('rehab_session_user_v1');
@@ -1189,7 +1196,7 @@ export const StorageService = {
     patients[patientIndex] = {
       ...patients[patientIndex],
       connectionStatus: status,
-      therapistId: status === 'connected' ? (patients[patientIndex].therapistId || 'acc-therapist-01') : undefined,
+      therapistId: status === 'connected' ? patients[patientIndex].therapistId : undefined,
       therapistName: status === 'connected' ? therapistName : undefined,
       requestedTherapistId: undefined,
       requestedTherapistName: undefined
@@ -1205,8 +1212,8 @@ export const StorageService = {
   // ==========================================
 
   async addClinicalFeedback(
-    patientId: string, 
-    feedback: { content: string; recommendation?: string }, 
+    patientId: string,
+    feedback: { content: string; recommendation?: string },
     therapistName: string = '담당 물리치료사',
     therapistId?: string
   ): Promise<boolean> {
@@ -1234,7 +1241,6 @@ export const StorageService = {
     localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
     emitChange();
 
-    // Cloud Firestore 피드백 저장 (Requirement 1, 2)
     if (isFirebaseConfigured() && actualTherapistId) {
       try {
         await FirebaseService.saveFeedback(patientId, newFeedback, actualTherapistId);
@@ -1275,7 +1281,6 @@ export const StorageService = {
     localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
     emitChange();
 
-    // Cloud Firestore 운동 프로그램 배정 저장 (Requirement 7)
     FirebaseService.savePrescribedProgram(patientId, assignedProgram, patient.therapistId || 'therapist').catch((err) => {
       console.warn('Firestore prescription sync deferred:', err);
     });
@@ -1327,6 +1332,7 @@ export const StorageService = {
     try {
       const data = localStorage.getItem(WORKOUT_LOGS_KEY);
       let logs: WorkoutLog[] = data ? JSON.parse(data) : INITIAL_WORKOUT_LOGS;
+      logs = logs.filter((log) => log && !DEMO_LOG_IDS.has(log.id) && !isDemoPatientId(log.patientId));
 
       if (patientId) {
         logs = logs.filter((log) => log.patientId === patientId);
@@ -1334,7 +1340,6 @@ export const StorageService = {
       if (date) {
         logs = logs.filter((log) => log.date === date);
       }
-      // Sort newest first
       return logs.sort((a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime());
     } catch {
       return INITIAL_WORKOUT_LOGS;
@@ -1364,7 +1369,6 @@ export const StorageService = {
     localStorage.setItem(WORKOUT_LOGS_KEY, JSON.stringify(updatedLogs));
     emitChange();
 
-    // Cloud Firestore 실시간 영구 저장 (Requirement 8)
     FirebaseService.saveWorkoutLog(newLog).catch((err) => {
       console.warn('Firestore workout log sync deferred:', err);
     });
@@ -1414,7 +1418,6 @@ export const StorageService = {
   // Therapist Overall Stats (Filtered to this therapist's patients)
   getTherapistOverviewStats(therapistUser?: AuthUser) {
     const patients = this.getPatientsForTherapist(therapistUser);
-    const today = this.getTodayDateString();
 
     let totalScheduledExercises = 0;
     let totalCompletedExercises = 0;
@@ -1424,12 +1427,10 @@ export const StorageService = {
       totalScheduledExercises += stats.totalAssigned;
       totalCompletedExercises += stats.completedCount;
 
-      // Find most recent log for this patient
       const patientLogs = this.getWorkoutLogs(patient.id);
       const recentLog = patientLogs.length > 0 ? patientLogs[0] : undefined;
       const lastWorkoutDate = recentLog ? recentLog.date : '수행 기록 없음';
 
-      // Status text
       let todayStatusText = '미처방';
       if (stats.totalAssigned > 0) {
         if (stats.completedCount === stats.totalAssigned) {
@@ -1441,8 +1442,6 @@ export const StorageService = {
         }
       }
 
-      // Check if feedback is needed:
-      // Needs feedback if patient has recent logs with pain >= 3 or notes, or patient completed workout but no feedback exists
       let needsFeedback = false;
       if (recentLog) {
         const latestFeedback = patient.feedbacks && patient.feedbacks.length > 0 ? patient.feedbacks[0] : undefined;
@@ -1470,7 +1469,6 @@ export const StorageService = {
         ? Math.round((totalCompletedExercises / totalScheduledExercises) * 100)
         : 0;
 
-    // Filter recent logs to only this therapist's patients
     const patientIds = new Set(patients.map((p) => p.id));
     const allLogs = this.getWorkoutLogs();
     const recentLogs = allLogs.filter((l) => patientIds.has(l.patientId)).slice(0, 8);
@@ -1494,7 +1492,8 @@ export const StorageService = {
     if (typeof window === 'undefined') return INITIAL_INQUIRIES;
     try {
       const data = localStorage.getItem(INQUIRIES_KEY);
-      return data ? JSON.parse(data) : INITIAL_INQUIRIES;
+      const list: SupportInquiry[] = data ? JSON.parse(data) : INITIAL_INQUIRIES;
+      return list.filter((i) => i && !DEMO_INQUIRY_IDS.has(i.id) && !isLegacyDemoIdentifier(i.authorUsername));
     } catch {
       return INITIAL_INQUIRIES;
     }
@@ -1537,6 +1536,7 @@ export const StorageService = {
     try {
       const data = localStorage.getItem(VIDEO_SUBMISSIONS_KEY);
       let submissions: PatientVideoSubmission[] = data ? JSON.parse(data) : INITIAL_VIDEO_SUBMISSIONS;
+      submissions = submissions.filter((s) => s && !DEMO_SUBMISSION_IDS.has(s.id) && !isDemoPatientId(s.patientId));
       if (patientId) {
         submissions = submissions.filter((s) => s.patientId === patientId);
       }
@@ -1603,7 +1603,6 @@ export const StorageService = {
   getOnboardingGuideDismissed(arg1: string, arg2?: string): boolean {
     if (typeof window === 'undefined' || !arg1) return false;
     try {
-      // 1. UID 기준 단일 키 확인 (예: rehab_onboarding_guide_v1_{uid})
       const uid = arg2 ? arg2 : arg1;
       const primaryKey = `${ONBOARDING_GUIDE_KEY}_${uid}`;
       const primaryVal = localStorage.getItem(primaryKey);
@@ -1611,7 +1610,6 @@ export const StorageService = {
         return primaryVal === 'true';
       }
 
-      // 2. 과거 형식 호환성 검사 (rehab_onboarding_guide_v1_{role}_{uid})
       if (arg2) {
         const legacyKey1 = `${ONBOARDING_GUIDE_KEY}_${arg1}_${arg2}`;
         if (localStorage.getItem(legacyKey1) === 'true') return true;
@@ -1639,7 +1637,6 @@ export const StorageService = {
         isDismissed = typeof arg3 === 'boolean' ? arg3 : true;
       }
 
-      // UID 기준 키에 저장
       const primaryKey = `${ONBOARDING_GUIDE_KEY}_${uid}`;
       localStorage.setItem(primaryKey, isDismissed ? 'true' : 'false');
       emitChange();

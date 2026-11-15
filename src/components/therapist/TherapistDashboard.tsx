@@ -37,15 +37,13 @@ interface TherapistDashboardProps {
   onNavigateTab: (tab: string, patientId?: string) => void;
   onOpenPatientDetail?: (patientId: string) => void;
   currentUser?: AuthUser;
-  onSimulatePatientInvite?: (inviteCode: string) => void;
 }
 
 export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
   onSelectPatientForProgram,
   onNavigateTab,
   onOpenPatientDetail,
-  currentUser,
-  onSimulatePatientInvite
+  currentUser
 }) => {
   const [isAddPatientModalOpen, setIsAddPatientModalOpen] = useState(false);
   const [modalDefaultTab, setModalDefaultTab] = useState<'invite' | 'code' | 'requests'>('invite');
@@ -58,7 +56,7 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
   const defaultTherapist = StorageService.getTherapist();
   const therapistName = currentUser?.name || defaultTherapist.name;
   const clinicName = currentUser?.clinic || defaultTherapist.clinic;
-  const connectionCode = currentUser?.connectionCode || 'PT-GW-821';
+  const connectionCode = currentUser?.connectionCode || '코드 미발급';
   const todayStr = StorageService.getTodayDateString();
 
   // Pending connection requests for this therapist
@@ -66,7 +64,8 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
   const pendingRequests = allRequests.filter((r) => r.status === 'pending');
 
   const handleCopyCode = () => {
-    navigator.clipboard?.writeText(connectionCode);
+    if (!currentUser?.connectionCode) return;
+    navigator.clipboard?.writeText(currentUser.connectionCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -573,23 +572,16 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
       )}
 
       {/* Add Patient Modal (Method A & B) */}
-      <AddPatientModal
-        isOpen={isAddPatientModalOpen}
-        onClose={() => setIsAddPatientModalOpen(false)}
-        currentUser={currentUser || {
-          id: 'acc-therapist-01',
-          username: 'therapist01',
-          name: '박건우 (물리치료사)',
-          role: 'therapist',
-          connectionCode: 'PT-GW-821',
-          clinic: '바른재활의학과의원',
-          accountStatus: 'active'
-        }}
-        onPatientAdded={() => {
-          setIsAddPatientModalOpen(false);
-        }}
-        onSimulatePatientInvite={onSimulatePatientInvite}
-      />
+      {currentUser && (
+        <AddPatientModal
+          isOpen={isAddPatientModalOpen}
+          onClose={() => setIsAddPatientModalOpen(false)}
+          currentUser={currentUser}
+          onPatientAdded={() => {
+            setIsAddPatientModalOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };

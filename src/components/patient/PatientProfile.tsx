@@ -7,8 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { Patient, UserAccount, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { AuthService, getFeedbackAuthorDisplayName } from '../../services/authService';
-import { FirebaseService } from '../../services/firebaseService';
-import { isFirebaseConfigured } from '../../config/firebaseConfig';
 import { 
   User, 
   Stethoscope, 
@@ -55,7 +53,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
   const connectionStatus = patient.connectionStatus || 'not_connected';
   const therapistName = patient.therapistName || '담당 물리치료사';
 
-  // Real-time lookup of therapist by code (Local + Remote Firestore publicTherapists)
+  // Real-time lookup of therapist by code via Firestore publicTherapists
   const [matchedTherapist, setMatchedTherapist] = useState<UserAccount | undefined>(undefined);
 
   useEffect(() => {
@@ -65,36 +63,19 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
       return;
     }
     let isMounted = true;
-    if (isFirebaseConfigured()) {
-      FirebaseService.findTherapistByConnectionCode(trimmed).then((remoteData) => {
+    AuthService.findTherapistByConnectionCodeAsync(trimmed)
+      .then((found) => {
         if (!isMounted) return;
-        if (remoteData) {
-          setMatchedTherapist({
-            id: remoteData.therapistId,
-            username: remoteData.therapistId,
-            name: remoteData.name,
-            passwordHash: '',
-            role: 'therapist',
-            connectionCode: remoteData.connectionCode,
-            clinic: remoteData.clinic,
-            accountStatus: 'active',
-            registeredAt: remoteData.createdAt || new Date().toISOString()
-          });
-        } else {
-          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-          setMatchedTherapist(localMatch);
-        }
-      }).catch(() => {
+        setMatchedTherapist(found || undefined);
+      })
+      .catch(() => {
         if (isMounted) {
-          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-          setMatchedTherapist(localMatch);
+          setMatchedTherapist(undefined);
         }
       });
-    } else {
-      const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-      setMatchedTherapist(localMatch);
-    }
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, [connectionCode]);
 
   // Connection request submit (await Firestore save with real error feedback)
@@ -303,7 +284,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
                     setConnectionCode(e.target.value);
                     setConnectMessage('');
                   }}
-                  placeholder="새로운 치료사 연결 코드 입력 (예: PT-GW-821)"
+                  placeholder="새로운 치료사 연결 코드 입력 (예: PT-1234)"
                   className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono uppercase"
                 />
               </div>
@@ -341,7 +322,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
                 </div>
               ) : connectionCode.trim().length >= 3 ? (
                 <p className="text-[11px] text-rose-600 bg-rose-50 p-2 rounded-lg">
-                  일치하는 물리치료사를 찾을 수 없습니다. 코드를 다시 확인해주세요.
+                  일치하는 물리치료사를 찾을 수 없습니다. 담당 치료사에게 전달받은 실제 연결 코드를 다시 확인해주세요.
                 </p>
               ) : null}
 
@@ -350,17 +331,6 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
                   {connectMessage}
                 </p>
               )}
-
-              <div className="pt-2 flex items-center justify-between text-[11px] text-gray-500">
-                <span>시연용 추천 코드: <code className="font-bold text-blue-700">PT-GW-821</code> (박건우 PT)</span>
-                <button
-                  type="button"
-                  onClick={() => setConnectionCode('PT-GW-821')}
-                  className="font-bold text-blue-600 hover:underline cursor-pointer"
-                >
-                  코드 자동 입력
-                </button>
-              </div>
             </div>
           </div>
         )}

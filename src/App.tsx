@@ -13,7 +13,6 @@ import { onAuthStateChanged } from 'firebase/auth';
 
 // Common Components
 import { Navbar } from './components/common/Navbar';
-import { WelcomeLandingView } from './components/common/WelcomeLandingView';
 import { LoginView } from './components/common/LoginView';
 import { SignUpView } from './components/common/SignUpView';
 import { LogoutConfirmModal } from './components/common/LogoutConfirmModal';
@@ -43,12 +42,12 @@ export default function App() {
     return AuthService.getSessionUser();
   });
 
-  // Unauthenticated screen: 'welcome' | 'login' | 'signup' (Default to 'login' for clean 2-column first screen)
-  const [authScreen, setAuthScreen] = useState<'welcome' | 'login' | 'signup'>('login');
+  // Unauthenticated screen: 'login' | 'signup' (Default to 'login' for clean 2-column first screen)
+  const [authScreen, setAuthScreen] = useState<'login' | 'signup'>('login');
   const [signupInitialRole, setSignupInitialRole] = useState<'patient' | 'therapist'>('patient');
 
   // Therapist invite link / code state
-  const [pendingInviteCode, setPendingInviteCode] = useState<string>(() => {
+  const [pendingInviteCode] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       return params.get('invite') || params.get('code') || '';
@@ -56,30 +55,38 @@ export default function App() {
     return '';
   });
 
-  const pendingInviteTherapist = React.useMemo(() => {
-    if (!pendingInviteCode) return null;
-    const therapist = AuthService.findTherapistByConnectionCode(pendingInviteCode);
-    if (!therapist || !therapist.connectionCode) return null;
-    return {
-      name: therapist.name,
-      clinic: therapist.clinic,
-      connectionCode: therapist.connectionCode
+  const [pendingInviteTherapist, setPendingInviteTherapist] = useState<{
+    name: string;
+    clinic?: string;
+    connectionCode: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pendingInviteCode) {
+      setPendingInviteTherapist(null);
+      return;
+    }
+    let isCancelled = false;
+    AuthService.findTherapistByConnectionCodeAsync(pendingInviteCode)
+      .then((therapist) => {
+        if (isCancelled) return;
+        if (therapist && therapist.connectionCode) {
+          setPendingInviteTherapist({
+            name: therapist.name,
+            clinic: therapist.clinic,
+            connectionCode: therapist.connectionCode
+          });
+        } else {
+          setPendingInviteTherapist(null);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) setPendingInviteTherapist(null);
+      });
+    return () => {
+      isCancelled = true;
     };
   }, [pendingInviteCode]);
-
-  // Handler for simulating patient invite from Therapist modal
-  const handleSimulatePatientInvite = (inviteCode: string) => {
-    setPendingInviteCode(inviteCode);
-    AuthService.logout();
-    setCurrentUser(null);
-    setSignupInitialRole('patient');
-    setAuthScreen('signup');
-    addToast(
-      'info',
-      '환자 초대 시뮬레이션 모드',
-      `초대 코드(${inviteCode})가 연동된 신규 환자 회원가입 화면으로 전환되었습니다.`
-    );
-  };
 
   // Navigation tab states
   // Patient tabs: 'home' | 'program' | 'history' | 'profile'
@@ -100,7 +107,7 @@ export default function App() {
   } | null>(null);
 
   // Therapist Selection States
-  const [selectedPatientForTherapist, setSelectedPatientForTherapist] = useState<string>('patient-1');
+  const [selectedPatientForTherapist, setSelectedPatientForTherapist] = useState<string>('');
 
   // Modals & Tools
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
@@ -135,8 +142,8 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
       const sessionUser = AuthService.getSessionUser();
       if (fbUser) {
-        // If session was a Firebase user and mismatched, resync profile
-        if (sessionUser && !AuthService.isPureDemoAccount(sessionUser) && sessionUser.id !== fbUser.uid) {
+        // If session user mismatched with Firebase Auth UID, resync profile
+        if (sessionUser && sessionUser.id !== fbUser.uid) {
           console.warn('Firebase Auth user changed, resyncing session:', fbUser.uid);
           FirebaseService.getUserProfile(fbUser.uid).then((profile) => {
             if (profile) {
@@ -161,11 +168,9 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Sync patient & therapist remote data from Firestore (Requirement 4 & Connection persistence)
+  // Sync patient & therapist remote data from Firestore
   useEffect(() => {
     if (!currentUser) return;
-    // 명시적으로 식별된 순수 데모 계정(patient01~03, therapist01, admin01)은 로컬 데모 데이터만 사용
-    if (AuthService.isPureDemoAccount(currentUser)) return;
 
     let isCancelled = false;
     let unsubProfile: (() => void) | null = null;
@@ -268,7 +273,7 @@ export default function App() {
         });
       }
 
-      // 2. Therapist Sync: Query connections collection + individual users getDoc (Requirement 4)
+      // 2. Therapist Sync: Query connections collection + individual users getDoc
       if (currentUser.role === 'therapist') {
         const therapistId = authUid;
 
@@ -414,36 +419,6 @@ export default function App() {
     }
   };
 
-  // One-click demo logins for Usability Evaluation
-  const handleDemoPatientLogin = () => {
-    const result = AuthService.login('patient01', 'demo1234');
-    if (result.success && result.user) {
-      setCurrentUser(result.user);
-      setPatientTab('home');
-      setActiveExerciseDetail(null);
-      addToast('success', '김민수 환자 계정으로 접속했습니다.', '오늘의 재활운동 및 통증 기록을 시연할 수 있습니다.');
-    }
-  };
-
-  const handleDemoTherapistLogin = () => {
-    const result = AuthService.login('therapist01', 'demo1234');
-    if (result.success && result.user) {
-      setCurrentUser(result.user);
-      setTherapistTab('dashboard');
-      setDetailedPatientId(null);
-      addToast('success', '박건우 물리치료사 계정으로 접속했습니다.', '담당 환자 관리, 운동 처방 및 피드백 작성을 시연할 수 있습니다.');
-    }
-  };
-
-  // Quick switch between patient and therapist demo accounts during evaluation
-  const handleQuickSwitchRole = () => {
-    if (currentUser?.role === 'therapist') {
-      handleDemoPatientLogin();
-    } else {
-      handleDemoTherapistLogin();
-    }
-  };
-
   // Logout handler
   const handleConfirmLogout = () => {
     const userName = currentUser?.name || '사용자';
@@ -451,24 +426,15 @@ export default function App() {
     setCurrentUser(null);
     setIsLogoutModalOpen(false);
     setActiveExerciseDetail(null);
-    setAuthScreen('welcome');
+    setAuthScreen('login');
     addToast('info', '로그아웃되었습니다.', `${userName} 님의 세션이 안전하게 종료되었습니다.`);
-  };
-
-  // Reset demo data handler
-  const handleResetData = () => {
-    if (confirm('모든 데이터를 초기 시연 데모 상태로 복원하시겠습니까? (수정한 처방 및 수행 기록이 리셋됩니다)')) {
-      StorageService.resetAllData();
-      setActiveExerciseDetail(null);
-      setTick((t) => t + 1);
-      addToast('success', '데모 데이터가 초기화되었습니다.', '가상 환자들과 기본 10종 운동 데이터로 복원되었습니다.');
-    }
   };
 
   // Patient detail & completion handlers
   const handleOpenExerciseDetail = (exercise: Exercise, assignmentId: string) => {
-    if (!currentUser || currentUser.role !== 'patient' || !currentUser.patientId) return;
-    const patient = StorageService.getPatientById(currentUser.patientId);
+    if (!currentUser || currentUser.role !== 'patient') return;
+    const patId = currentUser.patientId || currentUser.id;
+    const patient = StorageService.getPatientById(patId);
     const assignment = patient?.assignedProgram.find((a) => a.assignmentId === assignmentId);
     setActiveExerciseDetail({ exercise, assignment });
   };
@@ -496,25 +462,6 @@ export default function App() {
     setTherapistTab(tab);
     if (patientId) {
       setSelectedPatientForTherapist(patientId);
-    }
-  };
-
-  // Switch to specific patient account from therapist view (presentation testing convenience)
-  const handleSwitchToPatientAccount = (patientId: string) => {
-    const accounts = AuthService.getAccounts();
-    const account = accounts.find((acc) => acc.patientId === patientId);
-    if (account) {
-      const result = AuthService.login(account.username, account.passwordHash);
-      if (result.success && result.user) {
-        setCurrentUser(result.user);
-        setPatientTab('home');
-        setActiveExerciseDetail(null);
-        addToast(
-          'info',
-          `${result.user.name} 환자 계정으로 전환되었습니다.`,
-          '지정된 운동 프로그램과 수행 기록을 확인하세요.'
-        );
-      }
     }
   };
 
@@ -554,9 +501,10 @@ export default function App() {
     : allPatients;
 
   // Strict Patient Isolation: Patient only ever accesses their own patientId
-  const currentPatient: Patient = currentUser.role === 'patient' && currentUser.patientId
-    ? StorageService.getPatientById(currentUser.patientId) || {
-        id: currentUser.patientId,
+  const effectivePatientId = currentUser.patientId || currentUser.id;
+  const currentPatient: Patient = currentUser.role === 'patient'
+    ? StorageService.getPatientById(effectivePatientId) || {
+        id: effectivePatientId,
         name: currentUser.name,
         age: 30,
         gender: '남성',
@@ -567,7 +515,7 @@ export default function App() {
         connectionStatus: 'not_connected'
       }
     : {
-        id: 'patient-1',
+        id: currentUser.id,
         name: currentUser.name,
         age: 30,
         gender: '남성',
@@ -595,10 +543,8 @@ export default function App() {
           }
         }}
         onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
-        onResetData={handleResetData}
         isMobilePreview={isMobilePreview}
         onToggleMobilePreview={() => setIsMobilePreview(!isMobilePreview)}
-        onQuickSwitchRole={handleQuickSwitchRole}
       />
 
       {/* Main Content Viewport */}
@@ -732,7 +678,6 @@ export default function App() {
                 }}
                 currentUser={currentUser}
                 onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
-                onSwitchToPatientDemo={() => handleSwitchToPatientAccount('patient-1')}
               />
             </div>
 
@@ -752,7 +697,6 @@ export default function App() {
                     setDetailedPatientId(null);
                     setTherapistTab('prescriptions');
                   }}
-                  onSwitchToPatientView={handleSwitchToPatientAccount}
                   onPatientDisconnected={(patientName) => {
                     setDetailedPatientId(null);
                     setTherapistTab('patients');
@@ -792,7 +736,6 @@ export default function App() {
                       }}
                       onNavigateTab={handleTherapistNavigateTab}
                       onOpenPatientDetail={(patientId) => setDetailedPatientId(patientId)}
-                      onSimulatePatientInvite={handleSimulatePatientInvite}
                     />
                   )}
 
@@ -810,10 +753,8 @@ export default function App() {
                       onNavigateToLogs={(patientId) => {
                         setDetailedPatientId(patientId);
                       }}
-                      onSwitchToPatientView={handleSwitchToPatientAccount}
                       onOpenPatientDetail={(patientId) => setDetailedPatientId(patientId)}
                       onNavigateToSettings={() => setTherapistTab('settings')}
-                      onSimulatePatientInvite={handleSimulatePatientInvite}
                       onPatientListUpdated={() => setTick((t) => t + 1)}
                     />
                   )}
@@ -824,14 +765,12 @@ export default function App() {
                       selectedPatientId={selectedPatientForTherapist}
                       onSelectPatient={setSelectedPatientForTherapist}
                       onSaveSuccess={handleProgramSaveSuccess}
-                      onSwitchToPatientView={handleSwitchToPatientAccount}
                     />
                   )}
 
                   {therapistTab === 'settings' && (
                     <TherapistSettings
                       currentUser={currentUser}
-                      onResetData={handleResetData}
                       onRefreshData={() => setTick((t) => t + 1)}
                       onOpenGuide={() => setIsOnboardingGuideOpen(true)}
                     />

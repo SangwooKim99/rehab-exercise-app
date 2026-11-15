@@ -16,7 +16,6 @@ import {
   Settings, 
   FileText, 
   ArrowRight,
-  ExternalLink,
   Plus,
   UserPlus,
   MessageSquare,
@@ -35,11 +34,9 @@ interface TherapistPatientManagerProps {
   onSelectPatient: (patientId: string) => void;
   onNavigateToProgramEditor: (patientId: string) => void;
   onNavigateToLogs: (patientId: string) => void;
-  onSwitchToPatientView: (patientId: string) => void;
   onOpenPatientDetail: (patientId: string) => void;
   currentUser?: AuthUser;
   onNavigateToSettings?: () => void;
-  onSimulatePatientInvite?: (inviteCode: string) => void;
   onPatientListUpdated?: () => void;
 }
 
@@ -49,11 +46,9 @@ export const TherapistPatientManager: React.FC<TherapistPatientManagerProps> = (
   onSelectPatient,
   onNavigateToProgramEditor,
   onNavigateToLogs,
-  onSwitchToPatientView,
   onOpenPatientDetail,
   currentUser,
   onNavigateToSettings,
-  onSimulatePatientInvite,
   onPatientListUpdated
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -384,15 +379,6 @@ export const TherapistPatientManager: React.FC<TherapistPatientManagerProps> = (
                     </button>
                     <button
                       type="button"
-                      onClick={() => onSwitchToPatientView(selectedPatient.id)}
-                      className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
-                      title="이 환자의 시연 모드로 바로 전환"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>환자 화면 보기</span>
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => handleOpenDisconnectModal(selectedPatient)}
                       className="px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-xl transition-colors cursor-pointer"
                       title="환자 연결 해제 (운동 기록은 보존됨)"
@@ -510,26 +496,19 @@ export const TherapistPatientManager: React.FC<TherapistPatientManagerProps> = (
       )}
 
       {/* Add Patient Modal */}
-      <AddPatientModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        currentUser={currentUser || {
-          id: 'acc-therapist-01',
-          username: 'therapist01',
-          name: '박건우 (물리치료사)',
-          role: 'therapist',
-          connectionCode: 'PT-GW-821',
-          clinic: '바른재활의학과의원',
-          accountStatus: 'active'
-        }}
-        onPatientAdded={() => {
-          setIsAddModalOpen(false);
-          if (onPatientListUpdated) {
-            onPatientListUpdated();
-          }
-        }}
-        onSimulatePatientInvite={onSimulatePatientInvite}
-      />
+      {currentUser && (
+        <AddPatientModal
+          isOpen={isAddModalOpen}
+          onClose={() => setIsAddModalOpen(false)}
+          currentUser={currentUser}
+          onPatientAdded={() => {
+            setIsAddModalOpen(false);
+            if (onPatientListUpdated) {
+              onPatientListUpdated();
+            }
+          }}
+        />
+      )}
 
       {/* Disconnect Confirmation Modal (Requirement 2) */}
       {patientToDisconnect && (

@@ -182,11 +182,11 @@ export interface AuthUser {
   username: string;
   name: string;
   role: UserRole;
-  patientId?: string; // Defined for patients ('patient-1', 'patient-2', etc.)
-  therapistId?: string; // Defined for therapists
+  patientId?: string; // Firebase Auth UID for patients
+  therapistId?: string; // Firebase Auth UID for therapists
   accountStatus: AccountStatus; // 'active' | 'suspended'
   therapistVerification?: TherapistVerificationStatus; // 'unverified' | 'verified'
-  connectionCode?: string; // e.g. 'PT-GW-821' for therapists
+  connectionCode?: string; // Unique connection code for therapists (e.g. 'PT-1234')
   connectedTherapistId?: string; // for patients
   connectedTherapistName?: string; // for patients
   approvalStatus?: ApprovalStatus; // legacy compatibility
@@ -200,14 +200,14 @@ export interface AuthUser {
 export interface UserAccount {
   id: string;
   username: string;
-  passwordHash: string; // Stored only in local demo accounts list for prototype validation
+  passwordHash: string; // Kept empty ('') for Firebase Auth accounts
   name: string;
   role: UserRole;
   patientId?: string;
   therapistId?: string;
   accountStatus: AccountStatus; // 'active' | 'suspended'
   therapistVerification?: TherapistVerificationStatus; // 'unverified' | 'verified'
-  connectionCode?: string; // e.g. 'PT-GW-821' for therapists
+  connectionCode?: string; // Unique connection code for therapists (e.g. 'PT-1234')
   connectedTherapistId?: string; // for patients
   connectedTherapistName?: string; // for patients
   approvalStatus?: ApprovalStatus; // legacy compatibility

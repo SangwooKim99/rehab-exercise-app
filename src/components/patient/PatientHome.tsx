@@ -7,8 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { Patient, Exercise, UserAccount, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { AuthService, formatTherapistDisplayName, getFeedbackAuthorDisplayName } from '../../services/authService';
-import { FirebaseService } from '../../services/firebaseService';
-import { isFirebaseConfigured } from '../../config/firebaseConfig';
 import { 
   CheckCircle2, 
   ChevronRight, 
@@ -51,7 +49,7 @@ export const PatientHome: React.FC<PatientHomeProps> = ({
 
   const isDisconnectedOrUnlinked = connectionStatus === 'not_connected' || connectionStatus === 'disconnected';
 
-  // Look up therapist by code in real-time (Local + Remote Firestore publicTherapists)
+  // Look up therapist by code in real-time via Firestore publicTherapists
   const [matchedTherapist, setMatchedTherapist] = useState<UserAccount | undefined>(undefined);
 
   useEffect(() => {
@@ -61,36 +59,19 @@ export const PatientHome: React.FC<PatientHomeProps> = ({
       return;
     }
     let isMounted = true;
-    if (isFirebaseConfigured()) {
-      FirebaseService.findTherapistByConnectionCode(trimmed).then((remoteData) => {
+    AuthService.findTherapistByConnectionCodeAsync(trimmed)
+      .then((found) => {
         if (!isMounted) return;
-        if (remoteData) {
-          setMatchedTherapist({
-            id: remoteData.therapistId,
-            username: remoteData.therapistId,
-            name: remoteData.name,
-            passwordHash: '',
-            role: 'therapist',
-            connectionCode: remoteData.connectionCode,
-            clinic: remoteData.clinic,
-            accountStatus: 'active',
-            registeredAt: remoteData.createdAt || new Date().toISOString()
-          });
-        } else {
-          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-          setMatchedTherapist(localMatch);
-        }
-      }).catch(() => {
+        setMatchedTherapist(found || undefined);
+      })
+      .catch(() => {
         if (isMounted) {
-          const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-          setMatchedTherapist(localMatch);
+          setMatchedTherapist(undefined);
         }
       });
-    } else {
-      const localMatch = AuthService.findTherapistByConnectionCode(trimmed);
-      setMatchedTherapist(localMatch);
-    }
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, [inputCode]);
 
   // Handle send connection request (await Firestore save with real error feedback)
@@ -542,13 +523,13 @@ export const PatientHome: React.FC<PatientHomeProps> = ({
                     setInputCode(e.target.value);
                     setConnectMsg('');
                   }}
-                  placeholder="예: PT-GW-821"
+                  placeholder="예: PT-1234"
                   className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono uppercase"
                 />
               </div>
 
               {/* Real-time matched therapist preview */}
-              {matchedTherapist && (
+              {matchedTherapist ? (
                 <div className="p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-xs space-y-2 animate-in fade-in">
                   <div className="flex items-center justify-between">
                     <div>
@@ -572,20 +553,11 @@ export const PatientHome: React.FC<PatientHomeProps> = ({
                     <span>{isSendingRequest ? '전송 중...' : `${matchedTherapist.name} 치료사에게 연결 요청 전송`}</span>
                   </button>
                 </div>
-              )}
-
-              {/* Quick Fill Recommendation */}
-              <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs space-y-1.5">
-                <span className="text-[11px] font-bold text-gray-700 block">시연용 치료사 빠른 선택</span>
-                <button
-                  type="button"
-                  onClick={() => setInputCode('PT-GW-821')}
-                  className="w-full py-1.5 px-2.5 bg-white hover:bg-blue-50 text-blue-700 border border-gray-200 hover:border-blue-300 rounded-lg text-xs font-bold text-left flex items-center justify-between transition-colors cursor-pointer"
-                >
-                  <span>박건우 물리치료사 (대학병원 재활센터)</span>
-                  <span className="font-mono text-[11px] text-gray-500">PT-GW-821</span>
-                </button>
-              </div>
+              ) : inputCode.trim().length >= 3 ? (
+                <p className="text-[11px] text-rose-600 bg-rose-50 p-2.5 rounded-xl border border-rose-200">
+                  일치하는 물리치료사를 찾을 수 없습니다. 담당 치료사에게 전달받은 실제 연결 코드를 다시 확인해주세요.
+                </p>
+              ) : null}
 
               {connectMsg && (
                 <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-bold text-center">

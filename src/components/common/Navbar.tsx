@@ -6,14 +6,11 @@
 import React from 'react';
 import { AuthUser } from '../../types/rehab';
 import { 
-  Activity, 
-  RefreshCw, 
   Smartphone, 
   Monitor, 
   User, 
   Stethoscope, 
-  LogOut,
-  ArrowRightLeft
+  LogOut
 } from 'lucide-react';
 import { RehabLogo } from './RehabLogo';
 import { FirebaseService, FirebaseConnectionStatus } from '../../services/firebaseService';
@@ -23,10 +20,8 @@ interface NavbarProps {
   currentTab: string;
   onTabChange: (tab: string) => void;
   onOpenLogoutModal: () => void;
-  onResetData: () => void;
   isMobilePreview: boolean;
   onToggleMobilePreview: () => void;
-  onQuickSwitchRole?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -34,10 +29,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   onTabChange,
   onOpenLogoutModal,
-  onResetData,
   isMobilePreview,
-  onToggleMobilePreview,
-  onQuickSwitchRole
+  onToggleMobilePreview
 }) => {
   const [fbStatus, setFbStatus] = React.useState<FirebaseConnectionStatus>(() => FirebaseService.getConnectionStatus());
 
@@ -66,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-gray-200">
-      {/* Top Academic Presentation & Cloud Status Banner */}
+      {/* Top Cloud Status Banner */}
       <div className="bg-blue-50/80 border-b border-blue-100 px-4 py-1.5 text-xs text-blue-900 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-semibold text-blue-800">Rehab Exercise</span>
@@ -93,18 +86,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
         <div className="flex items-center gap-2.5">
-          {/* Quick Role Switcher for Evaluation */}
-          {onQuickSwitchRole && (
-            <button
-              onClick={onQuickSwitchRole}
-              className="flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-blue-900 bg-white px-2.5 py-0.5 rounded-lg border border-blue-200 shadow-2xs transition-colors cursor-pointer"
-              title="상대 역할 계정으로 즉시 전환"
-            >
-              <ArrowRightLeft className="w-3 h-3" />
-              <span>{isTherapist ? '김민수 환자로 전환' : '박건우 치료사로 전환'}</span>
-            </button>
-          )}
-
           {!isTherapist && (
             <button
               onClick={onToggleMobilePreview}
@@ -124,14 +105,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </button>
           )}
-          <button
-            onClick={onResetData}
-            className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-rose-600 transition-colors cursor-pointer"
-            title="초기 데모 데이터로 복원"
-          >
-            <RefreshCw className="w-3 h-3" />
-            <span>데모 초기화</span>
-          </button>
         </div>
       </div>
 

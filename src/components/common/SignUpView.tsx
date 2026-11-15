@@ -106,11 +106,11 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
       setIsLoading(false);
 
       if (result.success && result.user) {
-        // If patient and provided connection code, automatically issue connection request
+        // If patient and provided connection code, automatically issue connection request via Firestore publicTherapists lookup
         if (role === 'patient' && codeToConnect) {
-          const foundTherapist = AuthService.findTherapistByConnectionCode(codeToConnect);
+          const foundTherapist = await AuthService.findTherapistByConnectionCodeAsync(codeToConnect);
           if (foundTherapist) {
-            StorageService.sendConnectionRequest(
+            await StorageService.sendConnectionRequest(
               result.user.patientId || result.user.id,
               result.user.name,
               foundTherapist,
@@ -130,11 +130,11 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
 
   return (
     <div className="min-h-screen bg-white flex flex-col justify-between selection:bg-blue-100 selection:text-blue-900">
-      {/* Top Academic Banner */}
+      {/* Top Service Banner */}
       <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 text-xs text-blue-900 text-center">
-        <span className="font-semibold text-blue-800">물리치료학과 발표 및 시연용 프로토타입</span>
+        <span className="font-semibold text-blue-800">Rehab Exercise 맞춤형 재활운동 플랫폼</span>
         <span className="mx-2 text-blue-300">|</span>
-        <span className="text-blue-700">신규 회원가입 (승인 대기 없이 즉시 이용)</span>
+        <span className="text-blue-700">신규 회원가입</span>
       </div>
 
       {/* Main Sign Up Card Container */}
@@ -249,7 +249,7 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="예: user@example.com 또는 patient04"
+                  placeholder="예: user@example.com"
                   className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   autoComplete="username"
                   required
@@ -366,7 +366,7 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
                       type="text"
                       value={therapistConnectionCode}
                       onChange={(e) => setTherapistConnectionCode(e.target.value.toUpperCase())}
-                      placeholder="예: PT-GW-821"
+                      placeholder="예: PT-1234"
                       className="w-full px-3 py-2 text-xs rounded-lg border border-blue-200 bg-white font-mono tracking-wider focus:outline-none focus:ring-2 focus:ring-blue-500 uppercase placeholder:normal-case placeholder:font-sans"
                     />
                     {inviteTherapist ? (
@@ -375,7 +375,7 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
                       </p>
                     ) : (
                       <p className="text-[11px] text-gray-500 leading-relaxed">
-                        담당 물리치료사에게 전달받은 코드(예: PT-GW-821)가 있다면 입력해 주세요. 가입 완료 후 환자 홈 화면에서도 언제든 연결할 수 있습니다.
+                        담당 물리치료사에게 전달받은 코드(예: PT-1234)가 있다면 입력해 주세요. 가입 완료 후 환자 홈 화면에서도 언제든 연결할 수 있습니다.
                       </p>
                     )}
                   </div>
@@ -383,7 +383,7 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
                   <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-800 flex items-start gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
                     <span>
-                      승인 대기 절차 없이 즉시 환자 홈으로 접속되며, 상호 동의 하에 안전하게 연결됩니다.
+                      가입 즉시 환자 홈으로 접속되며, 상호 동의 하에 안전하게 연결됩니다.
                     </span>
                   </div>
                 </div>
@@ -416,7 +416,7 @@ export const SignUpView: React.FC<SignUpViewProps> = ({
 
       {/* Footer */}
       <footer className="border-t border-gray-100 py-4 text-center text-xs text-gray-500">
-        <p>© 2026 Rehab Exercise · 물리치료학과 발표 및 시연용 프로토타입</p>
+        <p>© 2026 Rehab Exercise · 환자-물리치료사 맞춤형 재활운동 플랫폼</p>
       </footer>
     </div>
   );

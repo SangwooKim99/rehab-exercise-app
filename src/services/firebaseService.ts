@@ -351,6 +351,29 @@ export const FirebaseService = {
           authProvider: 'firebase',
           isDemoAccount: false
         };
+
+        // 실제 물리치료사 계정의 공개 디렉터리(publicTherapists/{uid}) 누락 방지 동기화
+        if (authUser.role === 'therapist' && authUser.connectionCode) {
+          try {
+            const publicDocRef = doc(db, 'publicTherapists', uid);
+            const publicSnap = await getDoc(publicDocRef);
+            if (!publicSnap.exists()) {
+              const nowStr = new Date().toISOString();
+              await setDoc(publicDocRef, {
+                therapistId: uid,
+                name: authUser.name,
+                clinic: authUser.clinic || '재활치료센터',
+                licenseCode: authUser.licenseCode || 'PT-2026',
+                connectionCode: authUser.connectionCode.trim().toUpperCase(),
+                isVerified: authUser.therapistVerification === 'verified',
+                createdAt: data.createdAt || nowStr,
+                updatedAt: nowStr
+              });
+            }
+          } catch (pubErr) {
+            console.warn('publicTherapists sync on login warning:', pubErr);
+          }
+        }
       } else {
         // 프로필이 없는 경우 기본 프로필 생성
         const nowStr = new Date().toISOString();
@@ -1022,19 +1045,38 @@ export const FirebaseService = {
 
   /**
    * 공개 디렉터리(publicTherapists)에서 고유 연결 코드로 물리치료사 검색 (Requirement 1)
+   * - 실제 Firebase UID를 가진 물리치료사만 반환하며, 시연용 코드/ID는 제외
    */
   async findTherapistByConnectionCode(code: string): Promise<any | null> {
     const db = getFirebaseFirestore();
-    if (!db || !code) return null;
+    if (!db || !code || !code.trim()) return null;
+
+    const cleanCode = code.trim().toUpperCase();
+    if (cleanCode === 'PT-GW-821') {
+      return null;
+    }
 
     try {
       const q = query(
         collection(db, 'publicTherapists'),
-        where('connectionCode', '==', code.trim().toUpperCase())
+        where('connectionCode', '==', cleanCode)
       );
       const snap = await getDocs(q);
       if (!snap.empty) {
-        return snap.docs[0].data();
+        const docSnap = snap.docs[0];
+        const data = docSnap.data();
+        const resolvedTherapistId = data.therapistId || docSnap.id;
+        if (
+          !resolvedTherapistId ||
+          resolvedTherapistId === 'acc-therapist-01' ||
+          resolvedTherapistId === 'therapist-1'
+        ) {
+          return null;
+        }
+        return {
+          ...data,
+          therapistId: resolvedTherapistId
+        };
       }
       return null;
     } catch (err) {
