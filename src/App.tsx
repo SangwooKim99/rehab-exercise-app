@@ -122,6 +122,19 @@ export default function App() {
   const [isOnboardingGuideOpen, setIsOnboardingGuideOpen] = useState<boolean>(false);
   const [isMobilePreview, setIsMobilePreview] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [hasUnsavedChartChanges, setHasUnsavedChartChanges] = useState<boolean>(false);
+  const [pendingAppExitAction, setPendingAppExitAction] = useState<
+    | { type: 'tab'; tab: string; patientId?: string }
+    | { type: 'back' }
+    | { type: 'logout' }
+    | null
+  >(null);
+
+  useEffect(() => {
+    if (!detailedPatientId) {
+      setHasUnsavedChartChanges(false);
+    }
+  }, [detailedPatientId]);
 
   // Automatically show 3-step onboarding guide on first login/session if not dismissed
   useEffect(() => {
@@ -134,6 +147,8 @@ export default function App() {
     // Reset internal navigation history and mobile drawer when user session changes
     setTherapistNavHistory([]);
     setIsMobileSidebarOpen(false);
+    setHasUnsavedChartChanges(false);
+    setPendingAppExitAction(null);
   }, [currentUser?.id]);
 
   // Initialize storage and verify Firebase backend connection once
@@ -447,10 +462,20 @@ export default function App() {
     setIsLogoutModalOpen(false);
     setActiveExerciseDetail(null);
     setDetailedPatientId(null);
+    setHasUnsavedChartChanges(false);
+    setPendingAppExitAction(null);
     setTherapistNavHistory([]);
     setIsMobileSidebarOpen(false);
     setAuthScreen('login');
     addToast('info', '로그아웃되었습니다.', `${userName} 님의 세션이 안전하게 종료되었습니다.`);
+  };
+
+  const handleRequestOpenLogoutModal = () => {
+    if (currentUser?.role === 'therapist' && detailedPatientId && hasUnsavedChartChanges) {
+      setPendingAppExitAction({ type: 'logout' });
+      return;
+    }
+    setIsLogoutModalOpen(true);
   };
 
   // Patient detail & completion handlers
@@ -503,7 +528,7 @@ export default function App() {
     });
   };
 
-  const handleTherapistNavigateTab = (tab: string, patientId?: string) => {
+  const performTherapistNavigateTab = (tab: string, patientId?: string) => {
     const targetTab = VALID_THERAPIST_TABS.has(tab) ? tab : 'dashboard';
     const nextSelectedPatientId = patientId !== undefined ? patientId : selectedPatientForTherapist;
 
@@ -516,10 +541,19 @@ export default function App() {
     }
 
     setDetailedPatientId(null);
+    setHasUnsavedChartChanges(false);
     setTherapistTab(targetTab);
     if (patientId !== undefined) {
       setSelectedPatientForTherapist(nextSelectedPatientId);
     }
+  };
+
+  const handleTherapistNavigateTab = (tab: string, patientId?: string) => {
+    if (detailedPatientId && hasUnsavedChartChanges) {
+      setPendingAppExitAction({ type: 'tab', tab, patientId });
+      return;
+    }
+    performTherapistNavigateTab(tab, patientId);
   };
 
   const handleOpenTherapistPatientDetail = (patientId: string) => {
@@ -531,7 +565,7 @@ export default function App() {
     setDetailedPatientId(patientId);
   };
 
-  const handleTherapistBack = () => {
+  const performTherapistBack = () => {
     if (!currentUser || currentUser.role !== 'therapist') return;
 
     const currentPatients = StorageService.getPatientsForTherapist(currentUser);
@@ -565,6 +599,7 @@ export default function App() {
     }
 
     setTherapistNavHistory(nextHistory);
+    setHasUnsavedChartChanges(false);
 
     if (targetState) {
       setTherapistTab(targetState.tab);
@@ -587,6 +622,15 @@ export default function App() {
     if (therapistTab !== 'dashboard') {
       setTherapistTab('dashboard');
     }
+  };
+
+  const handleTherapistBack = () => {
+    if (!currentUser || currentUser.role !== 'therapist') return;
+    if (detailedPatientId && hasUnsavedChartChanges) {
+      setPendingAppExitAction({ type: 'back' });
+      return;
+    }
+    performTherapistBack();
   };
 
   const hasValidPreviousTherapistHistory = therapistNavHistory.some(
@@ -674,7 +718,7 @@ export default function App() {
             handleTherapistNavigateTab(tab);
           }
         }}
-        onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
+        onOpenLogoutModal={handleRequestOpenLogoutModal}
         isMobilePreview={isMobilePreview}
         onToggleMobilePreview={() => setIsMobilePreview(!isMobilePreview)}
         canGoBack={canTherapistGoBack}
@@ -809,7 +853,7 @@ export default function App() {
                 currentTab={detailedPatientId ? 'patients' : therapistTab}
                 onTabChange={(tab) => handleTherapistNavigateTab(tab)}
                 currentUser={currentUser}
-                onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
+                onOpenLogoutModal={handleRequestOpenLogoutModal}
               />
             </div>
 
@@ -825,7 +869,7 @@ export default function App() {
                     currentTab={detailedPatientId ? 'patients' : therapistTab}
                     onTabChange={(tab) => handleTherapistNavigateTab(tab)}
                     currentUser={currentUser}
-                    onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
+                    onOpenLogoutModal={handleRequestOpenLogoutModal}
                     isMobileDrawer
                     onCloseMobileDrawer={() => setIsMobileSidebarOpen(false)}
                   />
@@ -847,6 +891,7 @@ export default function App() {
                   onNavigateToProgramEditor={(patientId) => {
                     handleTherapistNavigateTab('prescriptions', patientId);
                   }}
+                  onDirtyChange={setHasUnsavedChartChanges}
                   onPatientDisconnected={(patientName) => {
                     const disconnectedId = detailedPatientId;
                     setTherapistNavHistory((prev) =>
@@ -951,6 +996,54 @@ export default function App() {
         onConfirm={handleConfirmLogout}
         onCancel={() => setIsLogoutModalOpen(false)}
       />
+
+      {/* Unsaved SOAP Note Exit Confirmation Modal */}
+      {pendingAppExitAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="app-soap-dirty-title"
+        >
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-2xl max-w-sm w-full overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100">
+              <h4 id="app-soap-dirty-title" className="text-sm font-bold text-gray-900">
+                저장하지 않은 SOAP 내용이 있습니다
+              </h4>
+            </div>
+            <div className="px-5 py-4 text-xs text-gray-600 leading-relaxed">
+              작성 또는 수정 중인 SOAP 노트를 저장하지 않고 이동하면 입력한 내용이 사라집니다. 계속 진행하시겠습니까?
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/60 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingAppExitAction(null)}
+                className="px-3.5 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                계속 작성
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const action = pendingAppExitAction;
+                  setPendingAppExitAction(null);
+                  setHasUnsavedChartChanges(false);
+                  if (action.type === 'tab') {
+                    performTherapistNavigateTab(action.tab, action.patientId);
+                  } else if (action.type === 'back') {
+                    performTherapistBack();
+                  } else if (action.type === 'logout') {
+                    setIsLogoutModalOpen(true);
+                  }
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
+              >
+                저장 안 하고 이동
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Feedback Notifications */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />

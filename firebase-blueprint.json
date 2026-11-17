@@ -127,6 +127,50 @@
         "updatedAt": { "type": "string", "description": "최종 처방 변경 일시" }
       },
       "required": ["patientId", "therapistId", "assignedProgram", "updatedAt"]
+    },
+    "SoapNote": {
+      "title": "SoapNote",
+      "description": "치료사 전용 환자 SOAP 임상 노트 (원작성자만 수정 가능, 연결된 치료사 조회 가능)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "SOAP 문서 자동 ID" },
+        "patientId": { "type": "string", "description": "환자 UID" },
+        "therapistId": { "type": "string", "description": "최초 작성 치료사 UID" },
+        "therapistName": { "type": "string", "description": "최초 작성 치료사 성명" },
+        "encounterDate": { "type": "string", "description": "치료·평가 날짜 (YYYY-MM-DD)" },
+        "subjective": { "type": "string", "maxLength": 5000, "description": "Subjective 본문" },
+        "objective": { "type": "string", "maxLength": 5000, "description": "Objective 본문" },
+        "assessment": { "type": "string", "maxLength": 5000, "description": "Assessment 본문" },
+        "plan": { "type": "string", "maxLength": 5000, "description": "Plan 본문" },
+        "createdAt": { "type": "object", "description": "서버 생성 Timestamp" },
+        "updatedAt": { "type": "object", "description": "서버 최종 수정 Timestamp" },
+        "updatedById": { "type": "string", "description": "최종 수정 치료사 UID" },
+        "updatedByName": { "type": "string", "description": "최종 수정 치료사 성명" },
+        "version": { "type": "number", "description": "문서 버전 (1부터 1씩 증가)" }
+      },
+      "required": ["id", "patientId", "therapistId", "therapistName", "encounterDate", "subjective", "objective", "assessment", "plan", "createdAt", "updatedAt", "updatedById", "updatedByName", "version"]
+    },
+    "SoapNoteRevision": {
+      "title": "SoapNoteRevision",
+      "description": "SOAP 노트 수정 전 스냅샷 (append-only 감사 이력)",
+      "type": "object",
+      "properties": {
+        "noteId": { "type": "string", "description": "상위 SOAP 노트 ID" },
+        "patientId": { "type": "string", "description": "환자 UID" },
+        "version": { "type": "number", "description": "수정 직전 버전 번호" },
+        "previousEncounterDate": { "type": "string", "description": "수정 전 평가 날짜" },
+        "previousSubjective": { "type": "string", "description": "수정 전 Subjective" },
+        "previousObjective": { "type": "string", "description": "수정 전 Objective" },
+        "previousAssessment": { "type": "string", "description": "수정 전 Assessment" },
+        "previousPlan": { "type": "string", "description": "수정 전 Plan" },
+        "previousUpdatedAt": { "type": "object", "description": "수정 전 최종 수정 Timestamp" },
+        "previousUpdatedById": { "type": "string", "description": "수정 전 수정자 UID" },
+        "previousUpdatedByName": { "type": "string", "description": "수정 전 수정자 성명" },
+        "editedById": { "type": "string", "description": "이번 수정 수행 치료사 UID" },
+        "editedByName": { "type": "string", "description": "이번 수정 수행 치료사 성명" },
+        "editedAt": { "type": "object", "description": "서버 수정 Timestamp" }
+      },
+      "required": ["noteId", "patientId", "version", "previousEncounterDate", "previousSubjective", "previousObjective", "previousAssessment", "previousPlan", "previousUpdatedAt", "previousUpdatedById", "previousUpdatedByName", "editedById", "editedByName", "editedAt"]
     }
   },
   "firestore": {
@@ -157,6 +201,14 @@
     "/prescriptions/{patientId}": {
       "schema": "PrescribedProgram",
       "description": "환자별 처방 운동 프로그램 컬렉션"
+    },
+    "/soapNotes/{noteId}": {
+      "schema": "SoapNote",
+      "description": "치료사 전용 SOAP 임상 노트 컬렉션"
+    },
+    "/soapNotes/{noteId}/revisions/{revisionId}": {
+      "schema": "SoapNoteRevision",
+      "description": "SOAP 노트 변경 이력 서브컬렉션 (v1, v2...)"
     }
   }
 }

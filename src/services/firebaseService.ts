@@ -29,7 +29,10 @@ import {
   where, 
   getDocs,
   onSnapshot,
-  getDocFromServer
+  getDocFromServer,
+  runTransaction,
+  serverTimestamp,
+  Timestamp
 } from 'firebase/firestore';
 import { 
   getFirebaseAuth, 
@@ -38,7 +41,12 @@ import {
   handleFirestoreError, 
   OperationType 
 } from './firebase';
-import { isFirebaseConfigured } from '../config/firebaseConfig';
+import {
+  getFirebaseConfig,
+  isFirebaseConfigured,
+  isFirestoreWriteAllowed,
+  assertFirestoreWriteAllowed
+} from '../config/firebaseConfig';
 import { StorageService } from './storageService';
 import { 
   AuthUser, 
@@ -48,7 +56,9 @@ import {
   WorkoutLog, 
   ClinicalFeedback, 
   PatientTherapistConnection, 
-  AssignedExercise 
+  AssignedExercise,
+  SoapNote,
+  SoapNoteRevision
 } from '../types/rehab';
 
 export interface FirebaseConnectionStatus {
@@ -75,6 +85,71 @@ function emitConnectionStatus(status: FirebaseConnectionStatus) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(CONNECTION_STATUS_EVENT, { detail: status }));
   }
+}
+
+/**
+ * SOAP 진료·평가 날짜(YYYY-MM-DD)가 실제 그레고리력 달력에 존재하는지 검증
+ * - 1900~2099년 범위, 월별 일수(30/31일) 및 윤년(4년 주기·100년 평년·400년 윤년)의 2월 29일 유효성 판별
+ */
+export function isValidSoapCalendarDate(dateStr: string): boolean {
+  if (typeof dateStr !== 'string') return false;
+  const trimmed = dateStr.trim();
+  const match = /^(19|20)(\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
+  if (!match) return false;
+
+  const year = Number(match[1] + match[2]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+
+  const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31
+  ];
+
+  return day >= 1 && day <= daysInMonth[month - 1];
+}
+
+export const MAX_SOAP_FIELD_LENGTH = 5000;
+
+/**
+ * SOAP S/O/A/P 각 항목의 최대 글자 수(5,000자) 초과 여부 검사
+ * - 5,000자 이하 허용, 5,001자 이상 차단
+ */
+export function getSoapFieldExceedingMaxLength(fields: {
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
+}): { key: 'subjective' | 'objective' | 'assessment' | 'plan'; label: string; length: number } | null {
+  const entries: Array<{
+    key: 'subjective' | 'objective' | 'assessment' | 'plan';
+    label: string;
+    value: string;
+  }> = [
+    { key: 'subjective', label: 'S · Subjective(주관적 호소)', value: fields.subjective },
+    { key: 'objective', label: 'O · Objective(객관적 소견)', value: fields.objective },
+    { key: 'assessment', label: 'A · Assessment(평가 및 해석)', value: fields.assessment },
+    { key: 'plan', label: 'P · Plan(치료 계획)', value: fields.plan }
+  ];
+
+  for (const item of entries) {
+    const trimmed = item.value.trim();
+    if (trimmed.length > MAX_SOAP_FIELD_LENGTH) {
+      return { key: item.key, label: item.label, length: trimmed.length };
+    }
+  }
+  return null;
 }
 
 export const FirebaseService = {
@@ -114,12 +189,13 @@ export const FirebaseService = {
 
     const auth = getFirebaseAuth();
     const db = getFirebaseFirestore();
+    const activeProjectId = getFirebaseConfig().projectId || '';
 
     if (!auth || !db) {
       const status: FirebaseConnectionStatus = {
         isConfigured: true,
         isConnected: false,
-        projectId: 'rehab-exercise-6484a',
+        projectId: activeProjectId,
         authEmail: null,
         lastCheckedAt: new Date().toISOString(),
         errorMessage: 'Firebase SDK 인스턴스를 초기화할 수 없습니다.'
@@ -137,7 +213,7 @@ export const FirebaseService = {
       const status: FirebaseConnectionStatus = {
         isConfigured: true,
         isConnected: true,
-        projectId: 'rehab-exercise-6484a',
+        projectId: activeProjectId,
         authEmail: auth.currentUser?.email || null,
         lastCheckedAt: new Date().toISOString()
       };
@@ -154,7 +230,7 @@ export const FirebaseService = {
         const status: FirebaseConnectionStatus = {
           isConfigured: true,
           isConnected: true,
-          projectId: 'rehab-exercise-6484a',
+          projectId: activeProjectId,
           authEmail: auth.currentUser?.email || null,
           lastCheckedAt: new Date().toISOString()
         };
@@ -165,7 +241,7 @@ export const FirebaseService = {
       const status: FirebaseConnectionStatus = {
         isConfigured: true,
         isConnected: false,
-        projectId: 'rehab-exercise-6484a',
+        projectId: activeProjectId,
         authEmail: auth.currentUser?.email || null,
         lastCheckedAt: new Date().toISOString(),
         errorMessage: error?.message || 'Firestore 서버에 연결할 수 없습니다.'
@@ -203,6 +279,7 @@ export const FirebaseService = {
     }
 
     try {
+      assertFirestoreWriteAllowed('회원가입 및 사용자 프로필 생성');
       // 1. Firebase Auth 계정 생성
       const userCredential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
       const uid = userCredential.user.uid;
@@ -353,7 +430,7 @@ export const FirebaseService = {
         };
 
         // 실제 물리치료사 계정의 공개 디렉터리(publicTherapists/{uid}) 누락 방지 동기화
-        if (authUser.role === 'therapist' && authUser.connectionCode) {
+        if (authUser.role === 'therapist' && authUser.connectionCode && isFirestoreWriteAllowed()) {
           try {
             const publicDocRef = doc(db, 'publicTherapists', uid);
             const publicSnap = await getDoc(publicDocRef);
@@ -388,7 +465,9 @@ export const FirebaseService = {
           createdAt: nowStr,
           updatedAt: nowStr
         };
-        await setDoc(userDocRef, fallbackDoc);
+        if (isFirestoreWriteAllowed()) {
+          await setDoc(userDocRef, fallbackDoc);
+        }
         authUser = {
           id: uid,
           username: email.split('@')[0],
@@ -458,6 +537,7 @@ export const FirebaseService = {
 
     const logPath = `workoutLogs/${log.id}`;
     try {
+      assertFirestoreWriteAllowed('운동 수행 기록 저장');
       const logRef = doc(db, 'workoutLogs', log.id);
       // 보안 규칙의 incoming().painLevel >= 0 && painLevel <= 10 충족 보장
       const safePainLevel = typeof log.painLevel === 'number' 
@@ -509,6 +589,7 @@ export const FirebaseService = {
 
     const userPath = `users/${patientId}`;
     try {
+      assertFirestoreWriteAllowed('운동 처방 저장');
       // 1. users/{patientId} 문서 업데이트 (규칙의 affectedKeys: assignedProgram, updatedAt)
       const userRef = doc(db, 'users', patientId);
       await updateDoc(userRef, {
@@ -583,6 +664,7 @@ export const FirebaseService = {
 
     const feedbackPath = `feedbacks/${feedback.id}`;
     try {
+      assertFirestoreWriteAllowed('임상 피드백 저장');
       const feedbackRecord: ClinicalFeedback = {
         ...feedback,
         therapistId,
@@ -660,6 +742,7 @@ export const FirebaseService = {
     const connRef = doc(db, 'connections', canonicalId);
 
     try {
+      assertFirestoreWriteAllowed('환자-치료사 연결 상태 저장');
       // 1. 신규 연결 요청 (status === 'pending')
       if (connection.status === 'pending') {
         const createPayload: Record<string, any> = {
@@ -1216,6 +1299,7 @@ export const FirebaseService = {
     if (db) {
       const userRef = doc(db, 'users', patientId);
       try {
+        assertFirestoreWriteAllowed('진단명 수정');
         await updateDoc(userRef, {
           diagnosis: cleanDiagnosis,
           updatedAt: nowStr
@@ -1241,5 +1325,438 @@ export const FirebaseService = {
     });
 
     return { success: true };
+  },
+
+  /**
+   * 환자의 SOAP 노트 목록 조회 (연결된 검증 치료사 전용)
+   * - encounterDate 내림차순, 동일 날짜 내 createdAt 내림차순 정렬
+   * - 오류 발생 시 빈 배열로 위장하지 않고 호출부에 예외 전달
+   */
+  async getSoapNotes(patientId: string): Promise<SoapNote[]> {
+    const db = getFirebaseFirestore();
+    if (!db || !patientId) {
+      const err: any = new Error('Firestore 인스턴스 또는 환자 UID가 유효하지 않습니다.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      const err: any = new Error('인증된 치료사 세션을 확인할 수 없습니다. 다시 로그인해 주세요.');
+      err.code = 'unauthenticated';
+      throw err;
+    }
+
+    const q = query(
+      collection(db, 'soapNotes'),
+      where('patientId', '==', patientId)
+    );
+    const snap = await getDocs(q);
+    const notes: SoapNote[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      notes.push({
+        id: docSnap.id,
+        patientId: data.patientId,
+        therapistId: data.therapistId,
+        therapistName: data.therapistName || '물리치료사',
+        encounterDate: data.encounterDate || '',
+        subjective: data.subjective || '',
+        objective: data.objective || '',
+        assessment: data.assessment || '',
+        plan: data.plan || '',
+        createdAt: (data.createdAt as Timestamp) || null,
+        updatedAt: (data.updatedAt as Timestamp) || null,
+        updatedById: data.updatedById || data.therapistId,
+        updatedByName: data.updatedByName || data.therapistName || '물리치료사',
+        version: typeof data.version === 'number' ? data.version : 1
+      });
+    });
+
+    return notes.sort((a, b) => {
+      const dateCmp = (b.encounterDate || '').localeCompare(a.encounterDate || '');
+      if (dateCmp !== 0) return dateCmp;
+      const aTime = a.createdAt && typeof a.createdAt.toMillis === 'function' ? a.createdAt.toMillis() : 0;
+      const bTime = b.createdAt && typeof b.createdAt.toMillis === 'function' ? b.createdAt.toMillis() : 0;
+      return bTime - aTime;
+    });
+  },
+
+  /**
+   * 신규 SOAP 노트 작성 (Firestore 자동 ID 및 serverTimestamp 사용)
+   * - 실제 Firebase Auth UID를 기준으로 작성자 식별 및 users/{authUid}.name 우선 적용
+   */
+  async createSoapNote(params: {
+    patientId: string;
+    therapistDisplayName?: string;
+    encounterDate: string;
+    subjective: string;
+    objective: string;
+    assessment: string;
+    plan: string;
+  }): Promise<SoapNote> {
+    const db = getFirebaseFirestore();
+    if (!db) {
+      const err: any = new Error('Firestore에 연결할 수 없습니다.');
+      err.code = 'unavailable';
+      throw err;
+    }
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      const err: any = new Error('인증된 치료사 세션을 확인할 수 없습니다. 다시 로그인해 주세요.');
+      err.code = 'unauthenticated';
+      throw err;
+    }
+
+    assertFirestoreWriteAllowed('SOAP 노트 생성');
+
+    const encounterDate = params.encounterDate.trim();
+    const subjective = params.subjective.trim();
+    const objective = params.objective.trim();
+    const assessment = params.assessment.trim();
+    const plan = params.plan.trim();
+
+    if (!isValidSoapCalendarDate(encounterDate)) {
+      const err: any = new Error('치료 또는 평가 날짜가 유효하지 않습니다. 실제 달력에 존재하는 날짜(YYYY-MM-DD)를 입력해 주세요.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    if (!subjective || !objective || !assessment || !plan) {
+      const err: any = new Error('Subjective, Objective, Assessment, Plan 항목을 모두 입력해 주세요.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    const exceededCreateField = getSoapFieldExceedingMaxLength({
+      subjective,
+      objective,
+      assessment,
+      plan
+    });
+    if (exceededCreateField) {
+      const err: any = new Error(
+        `${exceededCreateField.label} 항목이 최대 입력 길이(${MAX_SOAP_FIELD_LENGTH.toLocaleString()}자)를 초과했습니다(현재 ${exceededCreateField.length.toLocaleString()}자). 각 항목은 ${MAX_SOAP_FIELD_LENGTH.toLocaleString()}자 이하로 입력해 주세요.`
+      );
+      err.code = 'invalid-argument';
+      throw err;
+    }
+
+    let resolvedName = '';
+    try {
+      const remoteName = await this.getTherapistRealName(authUid);
+      if (remoteName && remoteName.trim()) {
+        const cleanRemote = remoteName.trim();
+        resolvedName =
+          cleanRemote.endsWith('물리치료사') || cleanRemote.endsWith('PT') || cleanRemote.endsWith('치료사')
+            ? cleanRemote
+            : `${cleanRemote} 물리치료사`;
+      }
+    } catch {
+      // 이름 조회 실패 시 전달받은 표시명 폴백 (권한 판단은 authUid 기준으로 수행)
+    }
+    if (!resolvedName && params.therapistDisplayName?.trim()) {
+      resolvedName = params.therapistDisplayName.trim();
+    }
+    if (!resolvedName) {
+      resolvedName = '담당 물리치료사';
+    }
+
+    const noteRef = doc(collection(db, 'soapNotes'));
+    const payload = {
+      id: noteRef.id,
+      patientId: params.patientId,
+      therapistId: authUid,
+      therapistName: resolvedName,
+      encounterDate,
+      subjective,
+      objective,
+      assessment,
+      plan,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      updatedById: authUid,
+      updatedByName: resolvedName,
+      version: 1
+    };
+
+    await setDoc(noteRef, payload);
+
+    try {
+      const createdSnap = await getDoc(noteRef);
+      if (createdSnap.exists()) {
+        const d = createdSnap.data();
+        return {
+          id: createdSnap.id,
+          patientId: d.patientId,
+          therapistId: d.therapistId,
+          therapistName: d.therapistName,
+          encounterDate: d.encounterDate,
+          subjective: d.subjective,
+          objective: d.objective,
+          assessment: d.assessment,
+          plan: d.plan,
+          createdAt: (d.createdAt as Timestamp) || null,
+          updatedAt: (d.updatedAt as Timestamp) || null,
+          updatedById: d.updatedById,
+          updatedByName: d.updatedByName,
+          version: d.version
+        };
+      }
+    } catch {
+      // 직후 조회 실패 시 로컬 Timestamp 폴백
+    }
+
+    const nowTs = Timestamp.now();
+    return {
+      ...payload,
+      createdAt: nowTs,
+      updatedAt: nowTs
+    };
+  },
+
+  /**
+   * 기존 SOAP 노트 수정 (원자적 트랜잭션: 본문 갱신 + revisions/v{N} 스냅샷 동시 생성)
+   * - 낙관적 잠금(expectedVersion)으로 동시 수정 덮어쓰기 방지
+   */
+  async updateSoapNote(params: {
+    noteId: string;
+    expectedVersion: number;
+    therapistDisplayName?: string;
+    encounterDate: string;
+    subjective: string;
+    objective: string;
+    assessment: string;
+    plan: string;
+  }): Promise<SoapNote> {
+    const db = getFirebaseFirestore();
+    if (!db) {
+      const err: any = new Error('Firestore에 연결할 수 없습니다.');
+      err.code = 'unavailable';
+      throw err;
+    }
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      const err: any = new Error('인증된 치료사 세션을 확인할 수 없습니다. 다시 로그인해 주세요.');
+      err.code = 'unauthenticated';
+      throw err;
+    }
+
+    assertFirestoreWriteAllowed('SOAP 노트 수정');
+
+    const encounterDate = params.encounterDate.trim();
+    const subjective = params.subjective.trim();
+    const objective = params.objective.trim();
+    const assessment = params.assessment.trim();
+    const plan = params.plan.trim();
+
+    if (!isValidSoapCalendarDate(encounterDate)) {
+      const err: any = new Error('치료 또는 평가 날짜가 유효하지 않습니다. 실제 달력에 존재하는 날짜(YYYY-MM-DD)를 입력해 주세요.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    if (!subjective || !objective || !assessment || !plan) {
+      const err: any = new Error('Subjective, Objective, Assessment, Plan 항목을 모두 입력해 주세요.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    const exceededUpdateField = getSoapFieldExceedingMaxLength({
+      subjective,
+      objective,
+      assessment,
+      plan
+    });
+    if (exceededUpdateField) {
+      const err: any = new Error(
+        `${exceededUpdateField.label} 항목이 최대 입력 길이(${MAX_SOAP_FIELD_LENGTH.toLocaleString()}자)를 초과했습니다(현재 ${exceededUpdateField.length.toLocaleString()}자). 각 항목은 ${MAX_SOAP_FIELD_LENGTH.toLocaleString()}자 이하로 입력해 주세요.`
+      );
+      err.code = 'invalid-argument';
+      throw err;
+    }
+
+    let resolvedName = '';
+    try {
+      const remoteName = await this.getTherapistRealName(authUid);
+      if (remoteName && remoteName.trim()) {
+        const cleanRemote = remoteName.trim();
+        resolvedName =
+          cleanRemote.endsWith('물리치료사') || cleanRemote.endsWith('PT') || cleanRemote.endsWith('치료사')
+            ? cleanRemote
+            : `${cleanRemote} 물리치료사`;
+      }
+    } catch {
+      // 표시명 폴백
+    }
+    if (!resolvedName && params.therapistDisplayName?.trim()) {
+      resolvedName = params.therapistDisplayName.trim();
+    }
+    if (!resolvedName) {
+      resolvedName = '담당 물리치료사';
+    }
+
+    const noteRef = doc(db, 'soapNotes', params.noteId);
+
+    let committedFallbackNote: SoapNote | null = null;
+
+    await runTransaction(db, async (transaction) => {
+      const noteSnap = await transaction.get(noteRef);
+      if (!noteSnap.exists()) {
+        const err: any = new Error('수정하려는 SOAP 기록을 찾을 수 없습니다.');
+        err.code = 'not-found';
+        throw err;
+      }
+
+      const current = noteSnap.data();
+      if (current.therapistId !== authUid) {
+        const err: any = new Error('작성자 본인만 SOAP 기록을 수정할 수 있습니다.');
+        err.code = 'permission-denied';
+        throw err;
+      }
+
+      const currentVersion = typeof current.version === 'number' ? current.version : 1;
+      if (currentVersion !== params.expectedVersion) {
+        const err: any = new Error(
+          '다른 화면 또는 기기에서 이미 이 SOAP 기록이 수정되었습니다. 최신 내용을 다시 불러온 뒤 수정해 주세요.'
+        );
+        err.code = 'version-conflict';
+        throw err;
+      }
+
+      const hasChanged =
+        encounterDate !== current.encounterDate ||
+        subjective !== current.subjective ||
+        objective !== current.objective ||
+        assessment !== current.assessment ||
+        plan !== current.plan;
+
+      if (!hasChanged) {
+        const err: any = new Error('변경된 내용이 없습니다.');
+        err.code = 'no-changes';
+        throw err;
+      }
+
+      const revRef = doc(db, 'soapNotes', params.noteId, 'revisions', `v${currentVersion}`);
+      const nextVersion = currentVersion + 1;
+
+      transaction.update(noteRef, {
+        encounterDate,
+        subjective,
+        objective,
+        assessment,
+        plan,
+        updatedAt: serverTimestamp(),
+        updatedById: authUid,
+        updatedByName: resolvedName,
+        version: nextVersion
+      });
+
+      transaction.set(revRef, {
+        noteId: params.noteId,
+        patientId: current.patientId,
+        version: currentVersion,
+        previousEncounterDate: current.encounterDate,
+        previousSubjective: current.subjective,
+        previousObjective: current.objective,
+        previousAssessment: current.assessment,
+        previousPlan: current.plan,
+        previousUpdatedAt: current.updatedAt,
+        previousUpdatedById: current.updatedById || current.therapistId,
+        previousUpdatedByName: current.updatedByName || current.therapistName,
+        editedById: authUid,
+        editedByName: resolvedName,
+        editedAt: serverTimestamp()
+      });
+
+      committedFallbackNote = {
+        id: params.noteId,
+        patientId: current.patientId,
+        therapistId: current.therapistId,
+        therapistName: current.therapistName || resolvedName,
+        encounterDate,
+        subjective,
+        objective,
+        assessment,
+        plan,
+        createdAt: (current.createdAt as Timestamp) || null,
+        updatedAt: Timestamp.now(),
+        updatedById: authUid,
+        updatedByName: resolvedName,
+        version: nextVersion
+      };
+    });
+
+    try {
+      const updatedSnap = await getDoc(noteRef);
+      if (updatedSnap.exists()) {
+        const d = updatedSnap.data();
+        return {
+          id: updatedSnap.id,
+          patientId: d.patientId,
+          therapistId: d.therapistId,
+          therapistName: d.therapistName,
+          encounterDate: d.encounterDate,
+          subjective: d.subjective,
+          objective: d.objective,
+          assessment: d.assessment,
+          plan: d.plan,
+          createdAt: (d.createdAt as Timestamp) || null,
+          updatedAt: (d.updatedAt as Timestamp) || null,
+          updatedById: d.updatedById,
+          updatedByName: d.updatedByName,
+          version: d.version
+        };
+      }
+    } catch {
+      // 트랜잭션 커밋 성공 직후 조회 실패 시 커밋된 스냅샷 폴백 반환
+    }
+
+    if (committedFallbackNote) {
+      return committedFallbackNote;
+    }
+
+    const err: any = new Error('수정된 SOAP 기록을 다시 불러오지 못했습니다.');
+    err.code = 'not-found';
+    throw err;
+  },
+
+  /**
+   * 특정 SOAP 노트의 수정 이력(revisions) 조회
+   */
+  async getSoapNoteRevisions(noteId: string): Promise<SoapNoteRevision[]> {
+    const db = getFirebaseFirestore();
+    if (!db || !noteId) return [];
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      const err: any = new Error('인증된 치료사 세션을 확인할 수 없습니다.');
+      err.code = 'unauthenticated';
+      throw err;
+    }
+
+    const q = query(collection(db, 'soapNotes', noteId, 'revisions'));
+    const snap = await getDocs(q);
+    const revisions: SoapNoteRevision[] = [];
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      revisions.push({
+        id: docSnap.id,
+        noteId: d.noteId || noteId,
+        patientId: d.patientId,
+        version: typeof d.version === 'number' ? d.version : 0,
+        previousEncounterDate: d.previousEncounterDate || '',
+        previousSubjective: d.previousSubjective || '',
+        previousObjective: d.previousObjective || '',
+        previousAssessment: d.previousAssessment || '',
+        previousPlan: d.previousPlan || '',
+        previousUpdatedAt: (d.previousUpdatedAt as Timestamp) || null,
+        previousUpdatedById: d.previousUpdatedById || '',
+        previousUpdatedByName: d.previousUpdatedByName || '',
+        editedById: d.editedById || '',
+        editedByName: d.editedByName || '',
+        editedAt: (d.editedAt as Timestamp) || null
+      });
+    });
+
+    return revisions.sort((a, b) => b.version - a.version);
   }
 };

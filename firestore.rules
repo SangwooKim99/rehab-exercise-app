@@ -383,5 +383,190 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+
+    // =========================================================================
+    // 9. SOAP Notes & Immutable Revision History (치료사 전용 임상 SOAP 노트)
+    // - 현재 연결(connected)된 검증 치료사만 환자 기록 열람 가능 (과거 치료사 작성분 읽기 전용 포함)
+    // - 수정은 현재 연결된 상태의 원작성자 본인만 가능
+    // - 수정 시 이전 스냅샷(revisions/v{N})을 동일 트랜잭션/배치에서 원자적으로 생성해야만 통과
+    // - 환자 본인 조회·수정 및 클라이언트 삭제 전면 차단
+    // =========================================================================
+    function isNonEmptySoapText(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen && !val.matches('^[\\s]*$');
+    }
+
+    // 달력상 실존하는 YYYY-MM-DD 날짜 검증 (1900~2099년, 월별 일수 30/31일 및 윤년 2월 29일 계산 포함)
+    function isValidEncounterDate(val) {
+      return val is string && (
+        val.matches('^(19|20)[0-9]{2}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-8]))$') ||
+        val.matches('^(19(0[48]|[2468][048]|[13579][26])|20([02468][048]|[13579][26]))-02-29$')
+      );
+    }
+
+    // 인증된 치료사 UID(users/{auth.uid})의 등록 프로필 성명과 표시명 일치 여부 검증
+    // - users/{uid} 문서가 없거나 name 필드가 비어 있는 레거시/초기 계정은 정상 기능을 해치지 않도록 허용
+    // - 프로필에 유효한 name이 존재하는 경우 본인 성명(또는 '성명 물리치료사' / '성명 PT' / '성명 치료사')만 허용하여 타인 명의 사칭 차단
+    function isMatchingProfileDisplayName(displayName, profileName) {
+      return displayName is string && (
+        !(profileName is string) ||
+        profileName.matches('^[\\s]*$') ||
+        displayName == profileName ||
+        displayName == (profileName + ' 물리치료사') ||
+        displayName == (profileName + ' PT') ||
+        displayName == (profileName + ' 치료사')
+      );
+    }
+
+    function isValidAuthenticatedTherapistName(displayName) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return isNonEmptySoapText(displayName, 100) && (
+        !exists(userPath) ||
+        isMatchingProfileDisplayName(displayName, get(userPath).data.get('name', ''))
+      );
+    }
+
+    function hasValidAtomicSoapRevision(noteId) {
+      let revPath = /databases/$(database)/documents/soapNotes/$(noteId)/revisions/$('v' + string(existing().version));
+      return !exists(revPath) && existsAfter(revPath);
+    }
+
+    function isValidSoapRevisionPayload(noteId, revisionId, before, after) {
+      let rev = request.resource.data;
+      return before.therapistId == request.auth.uid &&
+        isConnectedTherapistForPatient(before.patientId) &&
+        before.version is int &&
+        revisionId == ('v' + string(before.version)) &&
+        after.version == before.version + 1 &&
+        after.updatedAt == request.time &&
+        after.updatedById == request.auth.uid &&
+        rev.keys().hasOnly([
+          'noteId', 'patientId', 'version',
+          'previousEncounterDate', 'previousSubjective', 'previousObjective',
+          'previousAssessment', 'previousPlan',
+          'previousUpdatedAt', 'previousUpdatedById', 'previousUpdatedByName',
+          'editedById', 'editedByName', 'editedAt'
+        ]) &&
+        rev.keys().hasAll([
+          'noteId', 'patientId', 'version',
+          'previousEncounterDate', 'previousSubjective', 'previousObjective',
+          'previousAssessment', 'previousPlan',
+          'previousUpdatedAt', 'previousUpdatedById', 'previousUpdatedByName',
+          'editedById', 'editedByName', 'editedAt'
+        ]) &&
+        rev.noteId == noteId &&
+        rev.patientId == before.patientId &&
+        rev.version == before.version &&
+        rev.previousEncounterDate == before.encounterDate &&
+        rev.previousSubjective == before.subjective &&
+        rev.previousObjective == before.objective &&
+        rev.previousAssessment == before.assessment &&
+        rev.previousPlan == before.plan &&
+        rev.previousUpdatedAt == before.updatedAt &&
+        rev.previousUpdatedById == before.get('updatedById', before.therapistId) &&
+        rev.previousUpdatedByName == before.get('updatedByName', before.therapistName) &&
+        rev.editedById == request.auth.uid &&
+        rev.editedByName == after.updatedByName &&
+        rev.editedAt == request.time;
+    }
+
+    function isValidSoapRevisionCreate(noteId, revisionId) {
+      let parentPath = /databases/$(database)/documents/soapNotes/$(noteId);
+      return isSignedIn() &&
+        isValidId(noteId) &&
+        isValidId(revisionId) &&
+        exists(parentPath) &&
+        existsAfter(parentPath) &&
+        isValidSoapRevisionPayload(
+          noteId,
+          revisionId,
+          get(parentPath).data,
+          getAfter(parentPath).data
+        );
+    }
+
+    function canReadSoapRevisions(noteId) {
+      let parentPath = /databases/$(database)/documents/soapNotes/$(noteId);
+      return isValidId(noteId) &&
+        exists(parentPath) &&
+        isConnectedTherapistForPatient(get(parentPath).data.patientId);
+    }
+
+    match /soapNotes/{noteId} {
+      // 조회: 현재 환자와 connected 상태인 검증 치료사만 허용 (과거 치료사 기록 포함)
+      // 환자 본인, 미연결 치료사, 연결 해제된 치료사 모두 차단
+      allow get, list: if isConnectedTherapistForPatient(resource.data.patientId);
+
+      // 생성: 현재 연결된 검증 치료사만 허용, 필수 입력·서버 시각·최초 version == 1 강제
+      allow create: if isValidId(noteId) &&
+        incoming().keys().hasOnly([
+          'id', 'patientId', 'therapistId', 'therapistName',
+          'encounterDate', 'subjective', 'objective', 'assessment', 'plan',
+          'createdAt', 'updatedAt', 'updatedById', 'updatedByName', 'version'
+        ]) &&
+        incoming().keys().hasAll([
+          'id', 'patientId', 'therapistId', 'therapistName',
+          'encounterDate', 'subjective', 'objective', 'assessment', 'plan',
+          'createdAt', 'updatedAt', 'updatedById', 'updatedByName', 'version'
+        ]) &&
+        incoming().id == noteId &&
+        incoming().therapistId == request.auth.uid &&
+        incoming().updatedById == request.auth.uid &&
+        incoming().therapistName == incoming().updatedByName &&
+        isConnectedTherapistForPatient(incoming().patientId) &&
+        isValidUserWithRole(incoming().patientId, 'patient') &&
+        isValidAuthenticatedTherapistName(incoming().therapistName) &&
+        isValidEncounterDate(incoming().encounterDate) &&
+        isNonEmptySoapText(incoming().subjective, 5000) &&
+        isNonEmptySoapText(incoming().objective, 5000) &&
+        isNonEmptySoapText(incoming().assessment, 5000) &&
+        isNonEmptySoapText(incoming().plan, 5000) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        incoming().version is int &&
+        incoming().version == 1;
+
+      // 수정: 현재 연결된 원작성자만 가능, version + 1 및 revisions/v{N} 동시 생성 강제
+      allow update: if isValidId(noteId) &&
+        isConnectedTherapistForPatient(existing().patientId) &&
+        existing().therapistId == request.auth.uid &&
+        incoming().id == existing().id &&
+        incoming().patientId == existing().patientId &&
+        incoming().therapistId == existing().therapistId &&
+        incoming().therapistName == existing().therapistName &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'encounterDate', 'subjective', 'objective', 'assessment', 'plan',
+          'updatedAt', 'updatedById', 'updatedByName', 'version'
+        ]) &&
+        isValidEncounterDate(incoming().encounterDate) &&
+        isNonEmptySoapText(incoming().subjective, 5000) &&
+        isNonEmptySoapText(incoming().objective, 5000) &&
+        isNonEmptySoapText(incoming().assessment, 5000) &&
+        isNonEmptySoapText(incoming().plan, 5000) &&
+        incoming().updatedById == request.auth.uid &&
+        isValidAuthenticatedTherapistName(incoming().updatedByName) &&
+        incoming().updatedAt == request.time &&
+        existing().version is int &&
+        incoming().version is int &&
+        incoming().version == existing().version + 1 &&
+        (
+          incoming().encounterDate != existing().encounterDate ||
+          incoming().subjective != existing().subjective ||
+          incoming().objective != existing().objective ||
+          incoming().assessment != existing().assessment ||
+          incoming().plan != existing().plan
+        ) &&
+        hasValidAtomicSoapRevision(noteId);
+
+      // 삭제 전면 차단 (연결 해제 후에도 임상 기록 보존)
+      allow delete: if false;
+
+      // 수정 이력 서브컬렉션 (append-only, 부모 soapNotes/{noteId}.patientId 기반 O(1) 연결 검증)
+      match /revisions/{revisionId} {
+        allow get, list: if canReadSoapRevisions(noteId);
+        allow create: if isValidSoapRevisionCreate(noteId, revisionId);
+        allow update, delete: if false;
+      }
+    }
   }
 }

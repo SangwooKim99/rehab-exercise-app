@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { Timestamp } from 'firebase/firestore';
+
 export type ExerciseCategory = 
   | '유연성/스트레칭' 
   | '코어 안정화' 
@@ -96,6 +98,41 @@ export interface ClinicalFeedback {
   therapistName: string;
   content: string;
   recommendation?: string;
+}
+
+export interface SoapNote {
+  id: string;
+  patientId: string;
+  therapistId: string;
+  therapistName: string;
+  encounterDate: string; // YYYY-MM-DD
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+  updatedById: string;
+  updatedByName: string;
+  version: number;
+}
+
+export interface SoapNoteRevision {
+  id: string; // e.g. 'v1', 'v2'
+  noteId: string;
+  patientId: string;
+  version: number;
+  previousEncounterDate: string;
+  previousSubjective: string;
+  previousObjective: string;
+  previousAssessment: string;
+  previousPlan: string;
+  previousUpdatedAt: Timestamp | null;
+  previousUpdatedById: string;
+  previousUpdatedByName: string;
+  editedById: string;
+  editedByName: string;
+  editedAt: Timestamp | null;
 }
 
 export interface WorkoutLog {
