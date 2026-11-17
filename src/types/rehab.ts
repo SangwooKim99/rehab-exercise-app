@@ -35,6 +35,7 @@ export interface Exercise {
   defaultSets: number;
   defaultFrequency: string;
   thumbnailUrl?: string;
+  videoUrl?: string;
   videoPlaceholder: {
     durationSeconds: number;
     guidePoints: string[];

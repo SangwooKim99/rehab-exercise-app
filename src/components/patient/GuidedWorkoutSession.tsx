@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Patient, 
-  Exercise, 
-  AssignedExercise, 
-  WorkoutExecutionStatus, 
-  WorkoutDifficulty 
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Patient,
+  WorkoutExecutionStatus,
+  WorkoutDifficulty
 } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { ExerciseSvgGuide } from '../common/ExerciseSvgGuide';
@@ -19,17 +17,16 @@ import {
   Play,
   Pause,
   RotateCcw,
-  CheckCircle2,
   Clock,
   HeartPulse,
   Plus,
   Minus,
-  Sparkles,
   Info,
   AlertTriangle,
   X,
   Trophy,
-  Activity
+  ListChecks,
+  ClipboardList
 } from 'lucide-react';
 
 interface GuidedWorkoutSessionProps {
@@ -71,12 +68,11 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
   const [drafts, setDrafts] = useState<Record<string, ExerciseDraft>>(() => {
     const initialDrafts: Record<string, ExerciseDraft> = {};
     assigned.forEach((assignment) => {
-      const exercise = library.find((e) => e.id === assignment.exerciseId);
       const existingLogs = StorageService.getWorkoutLogs(patient.id, todayStr);
       const log = existingLogs.find((l) => l.exerciseId === assignment.exerciseId);
 
       initialDrafts[assignment.assignmentId] = {
-        status: (log?.status as WorkoutExecutionStatus) || (log ? 'completed' : 'completed'),
+        status: (log?.status as WorkoutExecutionStatus) || 'completed',
         actualSets: log ? log.actualSets : assignment.sets,
         actualReps: log ? log.actualReps : assignment.reps,
         prePainLevel: log?.prePainLevel ?? log?.painLevel ?? 1,
@@ -92,6 +88,11 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
   const currentAssignment = assigned[currentIndex];
   const currentExercise = currentAssignment ? library.find((e) => e.id === currentAssignment.exerciseId) : null;
   const currentDraft = currentAssignment ? drafts[currentAssignment.assignmentId] : null;
+
+  // Video & Motion Guide Playback State
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [videoError, setVideoError] = useState<boolean>(false);
 
   // Posture Hold Metronome State
   const [isHolding, setIsHolding] = useState<boolean>(false);
@@ -109,10 +110,12 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
     };
   }, [isHolding]);
 
-  // Reset timer on exercise switch
+  // Reset timer and playback state on exercise switch
   useEffect(() => {
     setIsHolding(false);
     setHoldTimer(0);
+    setIsPlaying(true);
+    setVideoError(false);
   }, [currentIndex]);
 
   const updateCurrentDraft = (field: keyof ExerciseDraft, value: any) => {
@@ -230,6 +233,8 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
 
   if (!currentExercise || !currentDraft) return null;
 
+  const hasRealVideoUrl = Boolean(currentExercise.videoUrl && currentExercise.videoUrl.trim().length > 0);
+
   return (
     <div className="space-y-6 pb-20">
       {/* Top Header & Step Progress Bar */}
@@ -237,15 +242,13 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
         <div className="flex items-center justify-between mb-3">
           <button
             onClick={() => {
-              if (confirm('운동 세션을 일시 중단하고 나가시겠습니까? (현재까지의 입력은 보존됩니다)')) {
-                saveCurrentExerciseLog();
-                onClose();
-              }
+              saveCurrentExerciseLog();
+              onClose();
             }}
             className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800"
           >
             <X className="w-4 h-4" />
-            <span>세션 닫기</span>
+            <span>세션 저장 후 닫기</span>
           </button>
 
           <span className="text-xs font-bold font-mono tabular-nums text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg">
@@ -263,13 +266,13 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
       </div>
 
       {/* Exercise Visual Guide Card */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4">
+      <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <span className="font-semibold text-blue-600">{currentExercise.category}</span>
               <span>·</span>
-              <span>{currentExercise.targetArea}</span>
+              <span>운동 부위: {currentExercise.targetArea}</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-extrabold text-gray-900 mt-1">
               {currentIndex + 1}. {currentExercise.name}
@@ -284,63 +287,146 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
           </div>
         </div>
 
-        {/* Anatomical Motion Guide Diagram */}
-        <div className="rounded-2xl border border-gray-200 overflow-hidden bg-slate-900">
-          <div className="p-4 bg-white flex justify-center">
-            <ExerciseSvgGuide
-              type={currentExercise.videoPlaceholder.illustrationType}
-              className="w-full max-w-md h-52 sm:h-60 object-contain"
-            />
+        {/* 1. 운동 영상 및 동작 가이드 */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-extrabold text-gray-800 flex items-center gap-1.5">
+              <span className="w-5 h-5 rounded-md bg-blue-600 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                1
+              </span>
+              <span>운동 영상 및 동작 가이드</span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => {
+                if (hasRealVideoUrl && !videoError && videoRef.current) {
+                  if (videoRef.current.paused) {
+                    videoRef.current.play().catch(() => setVideoError(true));
+                  } else {
+                    videoRef.current.pause();
+                  }
+                } else {
+                  setIsPlaying((prev) => !prev);
+                }
+              }}
+              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+              <span>{isPlaying ? '일시정지' : '동작 재생'}</span>
+            </button>
           </div>
 
-          {/* Guide Bar & Hold Timer */}
-          <div className="p-3.5 bg-slate-800 border-t border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-slate-400 font-semibold text-[11px]">핵심:</span>
-              {currentExercise.videoPlaceholder.guidePoints.map((point, idx) => (
-                <span key={idx} className="bg-slate-700 text-slate-200 px-2 py-0.5 rounded text-[11px]">
-                  {point}
-                </span>
-              ))}
-            </div>
-
-            {/* Posture Hold Metronome */}
-            <div className="flex items-center gap-2 bg-slate-700/80 px-2.5 py-1 rounded-lg">
-              <Clock className="w-3.5 h-3.5 text-blue-400" />
-              <span className="text-[11px]">자세 유지:</span>
-              <span className="font-mono tabular-nums font-bold text-white text-xs">
-                {holdTimer}초
-              </span>
-              <button
-                type="button"
-                onClick={() => setIsHolding(!isHolding)}
-                className="text-[11px] font-bold text-blue-400 hover:text-blue-300 ml-1 underline"
-              >
-                {isHolding ? '정지' : '측정'}
-              </button>
+          {hasRealVideoUrl && videoError && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-2">
+              <span>동영상을 불러오지 못해 실시간 동작 가이드로 전환되었습니다.</span>
               <button
                 type="button"
                 onClick={() => {
-                  setIsHolding(false);
-                  setHoldTimer(0);
+                  setVideoError(false);
+                  setIsPlaying(true);
                 }}
-                className="text-slate-400 hover:text-white"
-                title="리셋"
+                className="px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 font-bold text-[11px]"
               >
-                <RotateCcw className="w-3 h-3" />
+                재시도
               </button>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-gray-200 overflow-hidden bg-slate-900">
+            <div className="relative p-4 bg-white flex justify-center">
+              {hasRealVideoUrl && !videoError ? (
+                <video
+                  ref={videoRef}
+                  src={currentExercise.videoUrl}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  controls
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onError={() => {
+                    setVideoError(true);
+                    setIsPlaying(true);
+                  }}
+                  className="w-full max-w-md h-52 sm:h-60 object-contain rounded-xl bg-black"
+                />
+              ) : (
+                <ExerciseSvgGuide
+                  type={currentExercise.videoPlaceholder.illustrationType}
+                  isPlaying={isPlaying}
+                  className="w-full max-w-md h-52 sm:h-60 object-contain"
+                />
+              )}
+            </div>
+
+            {/* Guide Bar & Hold Timer */}
+            <div className="p-3.5 bg-slate-800 border-t border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-slate-400 font-semibold text-[11px]">핵심 포인트:</span>
+                {currentExercise.videoPlaceholder.guidePoints.map((point, idx) => (
+                  <span key={idx} className="bg-slate-700 text-slate-200 px-2 py-0.5 rounded text-[11px]">
+                    {point}
+                  </span>
+                ))}
+              </div>
+
+              {/* Posture Hold Metronome */}
+              <div className="flex items-center gap-2 bg-slate-700/80 px-2.5 py-1 rounded-lg">
+                <Clock className="w-3.5 h-3.5 text-blue-400" />
+                <span className="text-[11px]">자세 유지:</span>
+                <span className="font-mono tabular-nums font-bold text-white text-xs">
+                  {holdTimer}초
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsHolding(!isHolding)}
+                  className="text-[11px] font-bold text-blue-400 hover:text-blue-300 ml-1 underline"
+                >
+                  {isHolding ? '정지' : '측정'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsHolding(false);
+                    setHoldTimer(0);
+                  }}
+                  className="text-slate-400 hover:text-white"
+                  title="초기화"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Step-by-Step Instructions */}
-        <div className="space-y-2 pt-2">
-          <h2 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
-            단계별 수행 방법
+        {/* 2. 시작 자세 */}
+        <div className="space-y-1.5 pt-1">
+          <h2 className="text-xs font-extrabold text-gray-800 flex items-center gap-1.5">
+            <span className="w-5 h-5 rounded-md bg-blue-600 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+              2
+            </span>
+            <Info className="w-3.5 h-3.5 text-blue-600" />
+            <span>시작 자세</span>
+          </h2>
+          <p className="text-xs text-gray-800 leading-relaxed bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+            {currentExercise.startPosition}
+          </p>
+        </div>
+
+        {/* 3. 운동 방법 */}
+        <div className="space-y-2 pt-1">
+          <h2 className="text-xs font-extrabold text-gray-800 flex items-center gap-1.5">
+            <span className="w-5 h-5 rounded-md bg-blue-600 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+              3
+            </span>
+            <ListChecks className="w-3.5 h-3.5 text-blue-600" />
+            <span>운동 방법</span>
           </h2>
           <div className="space-y-1.5">
             {currentExercise.executionSteps.map((step, idx) => (
-              <div key={idx} className="flex items-start gap-2.5 text-xs text-gray-700 p-2.5 rounded-xl bg-gray-50 border border-gray-100">
+              <div key={idx} className="flex items-start gap-2.5 text-xs text-gray-800 p-2.5 rounded-xl bg-gray-50 border border-gray-100">
                 <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-mono font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">
                   {idx + 1}
                 </span>
@@ -350,23 +436,49 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
           </div>
         </div>
 
-        {/* Clinical Precautions */}
-        {currentAssignment.customNotes && (
-          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">
-            <strong>치료사 지시사항:</strong> {currentAssignment.customNotes}
-          </div>
-        )}
+        {/* 4. 주의사항 */}
+        <div className="space-y-2 pt-1">
+          <h2 className="text-xs font-extrabold text-gray-800 flex items-center gap-1.5">
+            <span className="w-5 h-5 rounded-md bg-amber-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+              4
+            </span>
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+            <span>주의사항</span>
+          </h2>
+          <ul className="space-y-1.5 p-3 rounded-xl bg-amber-50/50 border border-amber-100 text-xs text-gray-800">
+            {currentExercise.precautions.map((item, idx) => (
+              <li key={idx} className="flex items-start gap-2 leading-relaxed">
+                <span className="text-amber-600 font-bold">•</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+
+          {currentAssignment.customNotes && (
+            <div className="p-3 rounded-xl bg-amber-100/70 border border-amber-300 text-xs text-amber-950">
+              <strong>담당 치료사 안내:</strong> {currentAssignment.customNotes}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Result Input Form Card (실제 수행 결과 입력) */}
+      {/* 5. 운동 처방 정보 및 수행 결과 입력 */}
       <div className="bg-white rounded-2xl border border-blue-200 p-5 sm:p-6 shadow-sm space-y-5">
-        <div className="border-b border-gray-100 pb-3 flex items-center justify-between">
+        <div className="border-b border-gray-100 pb-3 flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-base font-bold text-gray-900">수행 결과 입력</h2>
-            <p className="text-xs text-gray-500">실제 수행한 세트와 통증 점수를 기록하세요</p>
+            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <span className="w-5 h-5 rounded-md bg-blue-600 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                5
+              </span>
+              <ClipboardList className="w-4 h-4 text-blue-600" />
+              <span>운동 처방 정보 및 수행 결과 입력</span>
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              처방된 횟수·세트를 확인하고 오늘 실제로 수행한 결과를 기록하세요
+            </p>
           </div>
-          <span className="text-xs text-blue-600 font-semibold font-mono tabular-nums">
-            처방: {currentAssignment.sets}세트 × {currentAssignment.reps}회
+          <span className="text-xs text-blue-700 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-100 font-semibold font-mono tabular-nums">
+            처방: {currentAssignment.sets}세트 × {currentAssignment.reps}회 ({currentAssignment.frequency})
           </span>
         </div>
 
@@ -477,12 +589,12 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
           </div>
         )}
 
-        {/* 3. Pain NRS (Pre & Post, 0~10 scale) */}
+        {/* 3. Pain Scale (Pre & Post, 0~10 scale) */}
         <div className="p-4 rounded-xl border border-gray-200 bg-white space-y-4">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
               <HeartPulse className="w-4 h-4 text-rose-500" />
-              통증 척도 (NRS 0~10)
+              통증 점수 (0~10점)
             </span>
             <span className="text-[11px] text-gray-500">선택 사항</span>
           </div>
@@ -492,7 +604,7 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
             <div>
               <div className="flex justify-between text-gray-600 mb-1.5">
                 <span>운동 <strong>전</strong> 통증:</span>
-                <span className="font-bold font-mono text-blue-600">NRS {currentDraft.prePainLevel}점</span>
+                <span className="font-bold font-mono text-blue-600">{currentDraft.prePainLevel}점</span>
               </div>
               <input
                 type="range"
@@ -504,8 +616,8 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
               />
               <div className="flex justify-between text-[10px] text-gray-400">
                 <span>0 (통증 없음)</span>
-                <span>5 (중등도)</span>
-                <span>10 (극심)</span>
+                <span>5 (중간 통증)</span>
+                <span>10 (심한 통증)</span>
               </div>
             </div>
 
@@ -513,7 +625,7 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
             <div>
               <div className="flex justify-between text-gray-600 mb-1.5">
                 <span>운동 <strong>후</strong> 통증:</span>
-                <span className="font-bold font-mono text-rose-600">NRS {currentDraft.postPainLevel}점</span>
+                <span className="font-bold font-mono text-rose-600">{currentDraft.postPainLevel}점</span>
               </div>
               <input
                 type="range"
@@ -525,8 +637,8 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
               />
               <div className="flex justify-between text-[10px] text-gray-400">
                 <span>0 (통증 없음)</span>
-                <span>5 (중등도)</span>
-                <span>10 (극심)</span>
+                <span>5 (중간 통증)</span>
+                <span>10 (심한 통증)</span>
               </div>
             </div>
           </div>
@@ -558,12 +670,12 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
         {/* 5. Special Notes / Memo */}
         <div>
           <label className="text-xs font-semibold text-gray-700 block mb-1.5">
-            특이사항 및 메모 (선택)
+            운동 소감 및 메모 (선택)
           </label>
           <textarea
             value={currentDraft.notes}
             onChange={(e) => updateCurrentDraft('notes', e.target.value)}
-            placeholder="동작 시 느낀 점, 관절 소리나 뻐근함 등을 적어주시면 치료사가 점검합니다."
+            placeholder="동작할 때 느낀 점이나 뻐근했던 부위를 적어주시면 치료사가 확인합니다."
             rows={2}
             className="w-full text-xs p-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />

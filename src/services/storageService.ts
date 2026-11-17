@@ -120,10 +120,16 @@ export const StorageService = {
       localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
     } else {
       try {
-        const stored = JSON.parse(localStorage.getItem(EXERCISES_KEY) || '[]');
-        if (stored.length < EXERCISE_LIBRARY.length || !stored[0]?.bodyParts) {
-          localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
-        }
+        const stored: Exercise[] = JSON.parse(localStorage.getItem(EXERCISES_KEY) || '[]');
+        const builtInMap = new Map(EXERCISE_LIBRARY.map((ex) => [ex.id, ex]));
+        const synced = EXERCISE_LIBRARY.map((latestEx) => {
+          const prev = Array.isArray(stored) ? stored.find((s) => s && s.id === latestEx.id) : undefined;
+          return prev?.videoUrl ? { ...latestEx, videoUrl: prev.videoUrl } : latestEx;
+        });
+        const customExercises = Array.isArray(stored)
+          ? stored.filter((s) => s && s.id && !builtInMap.has(s.id))
+          : [];
+        localStorage.setItem(EXERCISES_KEY, JSON.stringify([...synced, ...customExercises]));
       } catch {
         localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
       }
@@ -333,11 +339,17 @@ export const StorageService = {
       const data = localStorage.getItem(EXERCISES_KEY);
       if (!data) return EXERCISE_LIBRARY;
       const parsed: Exercise[] = JSON.parse(data);
-      if (parsed.length < EXERCISE_LIBRARY.length || !parsed[0]?.bodyParts) {
+      if (!Array.isArray(parsed) || parsed.length < EXERCISE_LIBRARY.length) {
         localStorage.setItem(EXERCISES_KEY, JSON.stringify(EXERCISE_LIBRARY));
         return EXERCISE_LIBRARY;
       }
-      return parsed;
+      const builtInMap = new Map(EXERCISE_LIBRARY.map((ex) => [ex.id, ex]));
+      const synced = EXERCISE_LIBRARY.map((latestEx) => {
+        const prev = parsed.find((s) => s && s.id === latestEx.id);
+        return prev?.videoUrl ? { ...latestEx, videoUrl: prev.videoUrl } : latestEx;
+      });
+      const customExercises = parsed.filter((s) => s && s.id && !builtInMap.has(s.id));
+      return [...synced, ...customExercises];
     } catch {
       return EXERCISE_LIBRARY;
     }
