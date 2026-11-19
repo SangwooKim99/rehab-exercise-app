@@ -355,6 +355,11 @@ export const StorageService = {
     }
   },
 
+  /** 신규 처방 및 운동 라이브러리 탭 노출용 (허리·몸통 중심 활성 운동만 반환) */
+  getPrescribableExerciseLibrary(): Exercise[] {
+    return this.getExerciseLibrary().filter((ex) => ex.isPrescribable !== false);
+  },
+
   getExerciseById(exerciseId: string): Exercise | undefined {
     const list = this.getExerciseLibrary();
     return list.find((e) => e.id === exerciseId);

@@ -15,7 +15,7 @@ import {
   ChevronDown,
   Search
 } from 'lucide-react';
-import { ALL_BODY_PARTS, BodyPartBadge } from '../common/BodyPartIcons';
+import { BodyPartBadge } from '../common/BodyPartIcons';
 
 interface TherapistProgramEditorProps {
   patients: Patient[];
@@ -31,6 +31,7 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
   onSaveSuccess
 }) => {
   const library = StorageService.getExerciseLibrary();
+  const prescribableLibrary = StorageService.getPrescribableExerciseLibrary();
   const currentPatient = patients.find((p) => p.id === selectedPatientId) || patients[0];
 
   // Editable working copy of assigned program for the current patient
@@ -59,7 +60,6 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
   // Add Exercise Modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [modalCategory, setModalCategory] = useState<string>('all');
-  const [modalBodyPart, setModalBodyPart] = useState<string>('all');
   const [modalSearch, setModalSearch] = useState<string>('');
   const [selectedLibraryExercise, setSelectedLibraryExercise] = useState<Exercise | null>(null);
 
@@ -144,13 +144,11 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     { id: '코어 안정화', label: '코어 안정화' },
     { id: '근력 강화', label: '근력 강화' },
     { id: '관절 가동성', label: '관절 가동성' },
-    { id: '유연성/스트레칭', label: '유연성/스트레칭' },
-    { id: '기능적 움직임', label: '기능적 움직임' }
+    { id: '유연성/스트레칭', label: '유연성/스트레칭' }
   ];
 
-  const filteredLibrary = library.filter((e) => {
+  const filteredLibrary = prescribableLibrary.filter((e) => {
     if (modalCategory !== 'all' && e.category !== modalCategory) return false;
-    if (modalBodyPart !== 'all' && (!e.bodyParts || !e.bodyParts.includes(modalBodyPart as any))) return false;
     if (modalSearch.trim()) {
       const q = modalSearch.trim().toLowerCase();
       const matchName = e.name.toLowerCase().includes(q);
@@ -400,7 +398,7 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
                   운동 라이브러리에서 선택 ({currentPatient?.name} 님 처방)
                 </h2>
                 <p className="text-xs text-gray-500">
-                  총 {library.length}종의 임상 재활운동 라이브러리 중 추가할 운동을 선택하세요.
+                  총 {prescribableLibrary.length}종의 허리·몸통 재활운동 라이브러리 중 추가할 운동을 선택하세요.
                 </p>
               </div>
               <button
@@ -419,43 +417,11 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
                 <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="운동명, 신체 부위, 목표 검색 (예: 목, 허리, 스쿼트)"
+                  placeholder="운동명, 부위, 운동 목적 검색 (예: 허리, 브리지, 코어)"
                   value={modalSearch}
                   onChange={(e) => setModalSearch(e.target.value)}
                   className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 placeholder-gray-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
-              </div>
-
-              {/* 7 Body Part Filter Chips */}
-              <div>
-                <span className="text-[11px] font-semibold text-gray-500 mb-1.5 block">신체 부위별 필터:</span>
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
-                  <button
-                    type="button"
-                    onClick={() => setModalBodyPart('all')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                      modalBodyPart === 'all'
-                        ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    전체 부위
-                  </button>
-                  {ALL_BODY_PARTS.map((bp) => (
-                    <button
-                      key={bp}
-                      type="button"
-                      onClick={() => setModalBodyPart(bp)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                        modalBodyPart === bp
-                          ? 'bg-blue-600 text-white font-semibold shadow-xs'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {bp}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Category Segmented Control */}

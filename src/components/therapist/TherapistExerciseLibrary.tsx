@@ -17,8 +17,7 @@ interface TherapistExerciseLibraryProps {
 export const TherapistExerciseLibrary: React.FC<TherapistExerciseLibraryProps> = ({
   onPrescribeExercise
 }) => {
-  const library = StorageService.getExerciseLibrary();
-  const [selectedBodyPart, setSelectedBodyPart] = useState<string>('all');
+  const library = StorageService.getPrescribableExerciseLibrary();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeExercise, setActiveExercise] = useState<Exercise>(library[0]);
@@ -28,14 +27,10 @@ export const TherapistExerciseLibrary: React.FC<TherapistExerciseLibraryProps> =
     { id: '코어 안정화', label: '코어 안정화' },
     { id: '근력 강화', label: '근력 강화' },
     { id: '관절 가동성', label: '관절 가동성' },
-    { id: '유연성/스트레칭', label: '유연성/스트레칭' },
-    { id: '기능적 움직임', label: '기능적 움직임' }
+    { id: '유연성/스트레칭', label: '유연성/스트레칭' }
   ];
 
   const filteredExercises = library.filter((ex) => {
-    if (selectedBodyPart !== 'all' && (!ex.bodyParts || !ex.bodyParts.includes(selectedBodyPart as BodyPartCategory))) {
-      return false;
-    }
     if (selectedCategory !== 'all' && ex.category !== selectedCategory) {
       return false;
     }
@@ -55,14 +50,15 @@ export const TherapistExerciseLibrary: React.FC<TherapistExerciseLibraryProps> =
       <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
                 <BookOpen className="w-5 h-5" />
               </span>
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">임상 재활운동 라이브러리</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">허리·몸통 재활운동 라이브러리</h1>
+              <BodyPartBadge bodyPart="허리·몸통" size="sm" isSelected />
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              근거 기반 총 {library.length}종의 표준 재활운동 프로토콜과 7개 신체 부위별 해부학적 운동 가이드를 제공합니다.
+              허리 환자를 위한 근거 기반 총 {library.length}종의 허리·몸통 및 골반 안정화 재활운동 가이드를 제공합니다.
             </p>
           </div>
 
@@ -72,59 +68,21 @@ export const TherapistExerciseLibrary: React.FC<TherapistExerciseLibraryProps> =
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="운동명, 부위, 질환 검색..."
+              placeholder="운동명, 부위, 운동 목적 검색..."
               className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-gray-200 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
         </div>
 
-        {/* 7 Body Parts Filter Bar */}
-        <div>
-          <span className="text-[11px] font-semibold text-gray-500 mb-1.5 block">신체 부위별 분류 (7개 부위):</span>
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-            <button
-              onClick={() => setSelectedBodyPart('all')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors ${
-                selectedBodyPart === 'all'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              전체 부위 ({library.length})
-            </button>
-            {ALL_BODY_PARTS.map((bp) => {
-              const count = library.filter((e) => e.bodyParts?.includes(bp)).length;
-              return (
-                <button
-                  key={bp}
-                  onClick={() => setSelectedBodyPart(bp)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors flex items-center gap-1.5 ${
-                    selectedBodyPart === bp
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <span>{bp}</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    selectedBodyPart === bp ? 'bg-white/20 text-white' : 'bg-gray-200 text-gray-600'
-                  }`}>
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Category Filters */}
+        {/* Category Filters (운동 목적별 분류) */}
         <div className="flex items-center gap-1.5 overflow-x-auto pt-3 border-t border-gray-100 no-scrollbar">
           {categories.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setSelectedCategory(cat.id)}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg whitespace-nowrap transition-colors ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap transition-colors ${
                 selectedCategory === cat.id
-                  ? 'bg-slate-700 text-white'
+                  ? 'bg-blue-600 text-white font-semibold shadow-xs'
                   : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
               }`}
             >

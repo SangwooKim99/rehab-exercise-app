@@ -7,13 +7,7 @@ import React from 'react';
 import { BodyPartCategory } from '../../types/rehab';
 
 export const ALL_BODY_PARTS: BodyPartCategory[] = [
-  '목',
-  '어깨',
-  '팔·손',
-  '허리·몸통',
-  '골반·엉덩관절',
-  '무릎',
-  '발목·발'
+  '허리·몸통'
 ];
 
 interface BodyPartIconProps {

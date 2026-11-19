@@ -36,6 +36,8 @@ export interface Exercise {
   defaultFrequency: string;
   thumbnailUrl?: string;
   videoUrl?: string;
+  /** 신규 처방 라이브러리 노출 여부 (false인 경우 기존 처방·기록 조회용으로만 유지되고 신규 처방 목록에서 제외됨) */
+  isPrescribable?: boolean;
   videoPlaceholder: {
     durationSeconds: number;
     guidePoints: string[];
