@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Video, 
   Play, 
@@ -26,19 +26,34 @@ interface TherapistVideoReviewSectionProps {
   patientName: string;
   therapistName?: string;
   onFeedbackSaved?: () => void;
+  initialSubmissionId?: string | null;
 }
 
 export const TherapistVideoReviewSection: React.FC<TherapistVideoReviewSectionProps> = ({
   patientId,
   patientName,
   therapistName,
-  onFeedbackSaved
+  onFeedbackSaved,
+  initialSubmissionId
 }) => {
   const submissions = StorageService.getVideoSubmissions(patientId);
-  const [selectedSubId, setSelectedSubId] = useState<string>(submissions[0]?.id || '');
+  const [selectedSubId, setSelectedSubId] = useState<string>(
+    initialSubmissionId || submissions[0]?.id || ''
+  );
   const [feedbackInput, setFeedbackInput] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [savedSuccessMsg, setSavedSuccessMsg] = useState<string>('');
+
+  useEffect(() => {
+    if (initialSubmissionId && submissions.some((s) => s.id === initialSubmissionId)) {
+      setSelectedSubId(initialSubmissionId);
+      const matched = submissions.find((s) => s.id === initialSubmissionId);
+      setFeedbackInput(matched?.therapistFeedback || '');
+    } else if (!submissions.some((s) => s.id === selectedSubId)) {
+      setSelectedSubId(submissions[0]?.id || '');
+      setFeedbackInput(submissions[0]?.therapistFeedback || '');
+    }
+  }, [patientId, initialSubmissionId]);
 
   const activeSubmission = submissions.find((s) => s.id === selectedSubId) || submissions[0];
 

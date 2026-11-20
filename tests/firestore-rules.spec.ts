@@ -23,7 +23,7 @@
  * 4. 테스트 실행: npx vitest run tests/firestore-rules.spec.ts
  */
 
-import { describe, it, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import {
   initializeTestEnvironment,
   RulesTestEnvironment,
@@ -1348,6 +1348,519 @@ describe('Cloud Firestore 보안 규칙 정밀 유닛 테스트', () => {
           });
         })
       );
+    });
+  });
+
+  // =========================================================================
+  // 8. users/{userId}/feedbackReadStates/{feedbackId} 피드백 읽음 상태 보안 규칙 검증 (Stage 3-A)
+  // =========================================================================
+  describe('8. users/{userId}/feedbackReadStates/{feedbackId} 피드백 읽음 상태 보안 규칙 검증', () => {
+    const setupFeedbackReadStateFixtures = async () => {
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        const adminDb = context.firestore();
+        await adminDb.collection('users').doc('patient-1').set({
+          uid: 'patient-1',
+          name: '김환자',
+          role: 'patient',
+          accountStatus: 'active'
+        });
+        await adminDb.collection('users').doc('patient-2').set({
+          uid: 'patient-2',
+          name: '이환자',
+          role: 'patient',
+          accountStatus: 'active'
+        });
+        await adminDb.collection('users').doc('therapist-1').set({
+          uid: 'therapist-1',
+          name: '박치료',
+          role: 'therapist',
+          accountStatus: 'active'
+        });
+        await adminDb.collection('verifiedTherapists').doc('therapist-1').set({
+          uid: 'therapist-1',
+          name: '박치료',
+          licenseNumber: 'PT-2026-301',
+          verifiedAt: '2026-11-01T00:00:00.000Z'
+        });
+        await adminDb.collection('connections').doc('patient-1_therapist-1').set({
+          connectionId: 'patient-1_therapist-1',
+          patientId: 'patient-1',
+          therapistId: 'therapist-1',
+          status: 'connected'
+        });
+        await adminDb.collection('feedbacks').doc('fb-p1-1').set({
+          id: 'fb-p1-1',
+          patientId: 'patient-1',
+          therapistId: 'therapist-1',
+          therapistName: '박치료 물리치료사',
+          date: '2026-11-19',
+          content: '브리지 운동 수행이 안정적입니다.',
+          recommendation: '현재 강도를 유지하세요.',
+          workoutLogId: 'log-p1-1',
+          createdAt: '2026-11-19T09:00:00.000Z',
+          notificationEligible: true
+        });
+        await adminDb.collection('feedbacks').doc('fb-p1-2').set({
+          id: 'fb-p1-2',
+          patientId: 'patient-1',
+          therapistId: 'therapist-1',
+          therapistName: '박치료 물리치료사',
+          date: '2026-11-19',
+          content: '호흡 조절에 조금 더 신경 써주세요.',
+          recommendation: '',
+          createdAt: '2026-11-19T10:00:00.000Z',
+          notificationEligible: true
+        });
+        await adminDb.collection('feedbacks').doc('fb-p2-1').set({
+          id: 'fb-p2-1',
+          patientId: 'patient-2',
+          therapistId: 'therapist-1',
+          therapistName: '박치료 물리치료사',
+          date: '2026-11-19',
+          content: '타 환자 대상 피드백입니다.',
+          recommendation: '',
+          createdAt: '2026-11-19T11:00:00.000Z',
+          notificationEligible: true
+        });
+      });
+    };
+
+    it('[1] 환자 본인은 본인 대상 실존 피드백에 대해 feedbackReadStates 문서를 생성할 수 있다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+      const readRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates')
+        .doc('fb-p1-1');
+
+      await assertSucceeds(
+        readRef.set({
+          feedbackId: 'fb-p1-1',
+          readAt: serverTs
+        })
+      );
+
+      const snap = await assertSucceeds(readRef.get());
+      expect(snap.exists).toBe(true);
+      expect(snap.data()?.feedbackId).toBe('fb-p1-1');
+      expect(typeof snap.data()?.readAt?.toMillis).toBe('function');
+    });
+
+    it('[2] 환자 본인은 자신의 feedbackReadStates 단일 조회(get) 및 목록 조회(list)를 수행할 수 있다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const seededTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-19T09:30:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        const adminDb = context.firestore();
+        await adminDb
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: seededTs });
+        await adminDb
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-2')
+          .set({ feedbackId: 'fb-p1-2', readAt: seededTs });
+      });
+
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const colRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+
+      const singleSnap = await assertSucceeds(colRef.doc('fb-p1-1').get());
+      expect(singleSnap.exists).toBe(true);
+      expect(singleSnap.data()?.feedbackId).toBe('fb-p1-1');
+
+      const listSnap = await assertSucceeds(colRef.get());
+      expect(listSnap.size).toBe(2);
+    });
+
+    it('[3] 다른 환자는 타 환자의 feedbackReadStates 조회(get/list) 및 생성(create)을 할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const seededTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-19T09:30:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: seededTs });
+      });
+
+      const patient2Db = testEnv.authenticatedContext('patient-2').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+      const p1ReadCol = patient2Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+
+      // 다른 환자의 단일 조회 차단
+      await assertFails(p1ReadCol.doc('fb-p1-1').get());
+      // 다른 환자의 목록 조회 차단
+      await assertFails(p1ReadCol.get());
+      // 다른 환자 하위 경로에 읽음 문서 생성 차단
+      await assertFails(
+        p1ReadCol.doc('fb-p1-2').set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+    });
+
+    it('[4] 연결된 검증 물리치료사라도 환자의 feedbackReadStates를 조회(get/list)하거나 생성(create)할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const seededTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-19T09:30:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: seededTs });
+      });
+
+      const therapistWithClaimDb = testEnv
+        .authenticatedContext('therapist-1', { role: 'therapist' })
+        .firestore();
+      const therapistVerifiedDocDb = testEnv
+        .authenticatedContext('therapist-1', {})
+        .firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+
+      const colWithClaim = therapistWithClaimDb
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+      const colWithVerifiedDoc = therapistVerifiedDocDb
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+
+      // Custom Claim 보유 연결 치료사의 조회·생성 차단
+      await assertFails(colWithClaim.doc('fb-p1-1').get());
+      await assertFails(colWithClaim.get());
+      await assertFails(
+        colWithClaim.doc('fb-p1-2').set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+
+      // verifiedTherapists 문서 인증 연결 치료사의 조회·생성 차단
+      await assertFails(colWithVerifiedDoc.doc('fb-p1-1').get());
+      await assertFails(colWithVerifiedDoc.get());
+      await assertFails(
+        colWithVerifiedDoc.doc('fb-p1-2').set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+    });
+
+    it('[5] 환자 본인이라도 이미 생성된 feedbackReadStates 문서를 수정(update/merge)할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const initialTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-18T10:00:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: initialTs });
+      });
+
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+      const readRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates')
+        .doc('fb-p1-1');
+
+      await assertFails(readRef.update({ readAt: serverTs }));
+      await assertFails(readRef.update({ feedbackId: 'fb-p1-1' }));
+      await assertFails(
+        readRef.set({ feedbackId: 'fb-p1-1', readAt: serverTs }, { merge: true })
+      );
+
+      const snap = await assertSucceeds(readRef.get());
+      expect(snap.data()?.readAt?.toMillis()).toBe(initialTs.toMillis());
+    });
+
+    it('[6] 환자 본인·연결 치료사·타 환자 모두 feedbackReadStates 문서를 삭제(delete)할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const initialTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-18T10:00:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: initialTs });
+      });
+
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const patient2Db = testEnv.authenticatedContext('patient-2').firestore();
+      const therapist1Db = testEnv
+        .authenticatedContext('therapist-1', { role: 'therapist' })
+        .firestore();
+
+      await assertFails(
+        patient1Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .delete()
+      );
+      await assertFails(
+        therapist1Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .delete()
+      );
+      await assertFails(
+        patient2Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .delete()
+      );
+
+      const snap = await assertSucceeds(
+        patient1Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .get()
+      );
+      expect(snap.exists).toBe(true);
+    });
+
+    it('[7] feedbacks 컬렉션에 존재하지 않는 피드백 ID로는 읽음 상태를 생성할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+
+      await assertFails(
+        patient1Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-does-not-exist-999')
+          .set({
+            feedbackId: 'fb-does-not-exist-999',
+            readAt: serverTs
+          })
+      );
+    });
+
+    it('[8] 다른 환자에게 속한 피드백 ID로는 자신의 읽음 상태를 생성할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+
+      // fb-p2-1은 patient-2 소유의 피드백
+      await assertFails(
+        patient1Db
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p2-1')
+          .set({
+            feedbackId: 'fb-p2-1',
+            readAt: serverTs
+          })
+      );
+    });
+
+    it('[9] 문서 ID 불일치 및 허용되지 않은 필드(추가·누락·타입 오류) 저장은 차단된다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+      const readCol = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+
+      // (a) 문서 ID(fb-p1-1)와 payload feedbackId(fb-p1-2) 불일치 -> 차단
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+
+      // (b) 허용되지 않은 추가 필드 포함 -> 차단
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          feedbackId: 'fb-p1-1',
+          readAt: serverTs,
+          extraField: 'not-allowed'
+        })
+      );
+
+      // (c) 필수 필드 readAt 누락 -> 차단
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          feedbackId: 'fb-p1-1'
+        })
+      );
+
+      // (d) 필수 필드 feedbackId 누락 -> 차단
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          readAt: serverTs
+        })
+      );
+
+      // (e) feedbackId 타입 오류(숫자/빈 문자열) -> 차단
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          feedbackId: 12345,
+          readAt: serverTs
+        })
+      );
+      await assertFails(
+        readCol.doc('fb-p1-1').set({
+          feedbackId: '',
+          readAt: serverTs
+        })
+      );
+    });
+
+    it('[10] 클라이언트가 임의로 지정한 readAt 타임스탬프(과거·미래·문자열·숫자·null)는 차단된다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const readRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates')
+        .doc('fb-p1-1');
+
+      const pastTs = firebase.firestore.Timestamp.fromDate(new Date('2020-01-01T00:00:00.000Z'));
+      const futureTs = firebase.firestore.Timestamp.fromDate(new Date('2099-01-01T00:00:00.000Z'));
+
+      await assertFails(readRef.set({ feedbackId: 'fb-p1-1', readAt: pastTs }));
+      await assertFails(readRef.set({ feedbackId: 'fb-p1-1', readAt: futureTs }));
+      await assertFails(
+        readRef.set({ feedbackId: 'fb-p1-1', readAt: '2026-11-19T09:00:00.000Z' })
+      );
+      await assertFails(readRef.set({ feedbackId: 'fb-p1-1', readAt: Date.now() }));
+      await assertFails(readRef.set({ feedbackId: 'fb-p1-1', readAt: null }));
+    });
+
+    it('[11] 동일 피드백 읽음 문서 재생성 시도는 차단되며 최초 읽음 시각(readAt)이 그대로 보존된다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const patient1Db = testEnv.authenticatedContext('patient-1').firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+
+      // Case A: 실제 최초 생성 직후 동일 문서 재생성(set) 시도 차단 및 최초 readAt 보존
+      const createdRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates')
+        .doc('fb-p1-1');
+
+      await assertSucceeds(
+        createdRef.set({
+          feedbackId: 'fb-p1-1',
+          readAt: serverTs
+        })
+      );
+      const firstSnap = await assertSucceeds(createdRef.get());
+      const firstReadAtMillis = firstSnap.data()?.readAt?.toMillis();
+      expect(typeof firstReadAtMillis).toBe('number');
+
+      await assertFails(
+        createdRef.set({
+          feedbackId: 'fb-p1-1',
+          readAt: serverTs
+        })
+      );
+      const afterDuplicateAttemptSnap = await assertSucceeds(createdRef.get());
+      expect(afterDuplicateAttemptSnap.data()?.readAt?.toMillis()).toBe(firstReadAtMillis);
+
+      // Case B: 과거 시점에 기록된 읽음 문서에 대한 재-set 시도 차단 및 고정 타임스탬프 불변 확인
+      const originalFixedTs = firebase.firestore.Timestamp.fromDate(
+        new Date('2026-11-17T08:15:00.000Z')
+      );
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-2')
+          .set({ feedbackId: 'fb-p1-2', readAt: originalFixedTs });
+      });
+
+      const existingRef = patient1Db
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates')
+        .doc('fb-p1-2');
+
+      await assertFails(
+        existingRef.set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+      const preservedSnap = await assertSucceeds(existingRef.get());
+      expect(preservedSnap.data()?.readAt?.toMillis()).toBe(originalFixedTs.toMillis());
+    });
+
+    it('[12] 비로그인(unauthenticated) 사용자는 feedbackReadStates의 조회·생성·수정·삭제를 모두 수행할 수 없다', async () => {
+      await setupFeedbackReadStateFixtures();
+      const seededTs = firebase.firestore.Timestamp.fromDate(new Date('2026-11-19T09:30:00.000Z'));
+
+      await testEnv.withSecurityRulesDisabled(async (context: any) => {
+        await context
+          .firestore()
+          .collection('users')
+          .doc('patient-1')
+          .collection('feedbackReadStates')
+          .doc('fb-p1-1')
+          .set({ feedbackId: 'fb-p1-1', readAt: seededTs });
+      });
+
+      const unauthDb = testEnv.unauthenticatedContext().firestore();
+      const serverTs = firebase.firestore.FieldValue.serverTimestamp();
+      const unauthCol = unauthDb
+        .collection('users')
+        .doc('patient-1')
+        .collection('feedbackReadStates');
+
+      await assertFails(unauthCol.doc('fb-p1-1').get());
+      await assertFails(unauthCol.get());
+      await assertFails(
+        unauthCol.doc('fb-p1-2').set({
+          feedbackId: 'fb-p1-2',
+          readAt: serverTs
+        })
+      );
+      await assertFails(unauthCol.doc('fb-p1-1').update({ readAt: serverTs }));
+      await assertFails(unauthCol.doc('fb-p1-1').delete());
     });
   });
 

@@ -190,6 +190,33 @@ service cloud.firestore {
       );
 
       allow delete: if false;
+
+      // =======================================================================
+      // 3-1. Feedback Read States Subcollection (환자별 피드백 읽음 상태)
+      // - 경로: /users/{userId}/feedbackReadStates/{feedbackId}
+      // - 환자 본인만 조회(get, list) 및 최초 생성(create-only) 가능
+      // - 허용 필드 엄격 제한: feedbackId(문서 ID 일치), readAt(서버 타임스탬프)
+      // - 실존하는 본인 대상 feedbacks/{feedbackId} 문서만 읽음 기록 생성 허용
+      // - 수정(update) 및 삭제(delete) 전면 차단
+      // =======================================================================
+      match /feedbackReadStates/{feedbackId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+        allow create: if isSignedIn() &&
+          request.auth.uid == userId &&
+          isValidId(userId) &&
+          isValidId(feedbackId) &&
+          incoming().keys().hasOnly(['feedbackId', 'readAt']) &&
+          incoming().keys().hasAll(['feedbackId', 'readAt']) &&
+          incoming().feedbackId is string &&
+          incoming().feedbackId == feedbackId &&
+          incoming().readAt is timestamp &&
+          incoming().readAt == request.time &&
+          exists(/databases/$(database)/documents/feedbacks/$(feedbackId)) &&
+          get(/databases/$(database)/documents/feedbacks/$(feedbackId)).data.patientId == userId;
+
+        allow update, delete: if false;
+      }
     }
 
     // =========================================================================

@@ -55,6 +55,8 @@ import {
   Patient, 
   WorkoutLog, 
   ClinicalFeedback, 
+  FeedbackReadState,
+  FeedbackReadErrorCode,
   PatientTherapistConnection, 
   AssignedExercise,
   SoapNote,
@@ -150,6 +152,155 @@ export function getSoapFieldExceedingMaxLength(fields: {
     }
   }
   return null;
+}
+
+const VALID_FIRESTORE_DOC_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
+
+export class FeedbackReadStateError extends Error {
+  code: FeedbackReadErrorCode;
+  originalError?: unknown;
+
+  constructor(code: FeedbackReadErrorCode, message: string, originalError?: unknown) {
+    super(message);
+    this.name = 'FeedbackReadStateError';
+    this.code = code;
+    this.originalError = originalError;
+  }
+}
+
+/**
+ * Firestore 읽음 상태 조회/저장 오류를 permission-denied / network 등 원인별로 명확히 분류
+ */
+export function classifyFeedbackReadError(error: unknown): {
+  code: FeedbackReadErrorCode;
+  message: string;
+} {
+  if (error instanceof FeedbackReadStateError) {
+    return { code: error.code, message: error.message };
+  }
+
+  const rawCode = String((error as any)?.code || '').toLowerCase();
+  const rawMessage = String((error as any)?.message || '');
+  const lowerMessage = rawMessage.toLowerCase();
+
+  if (
+    rawCode === 'permission-denied' ||
+    lowerMessage.includes('permission-denied') ||
+    lowerMessage.includes('insufficient permissions')
+  ) {
+    return {
+      code: 'permission-denied',
+      message: '피드백 읽음 상태에 접근할 권한이 없습니다. 보안 규칙 또는 로그인 계정을 확인해 주세요.'
+    };
+  }
+
+  if (
+    rawCode === 'unauthenticated' ||
+    lowerMessage.includes('unauthenticated')
+  ) {
+    return {
+      code: 'unauthenticated',
+      message: '로그인 인증 정보를 확인할 수 없습니다. 다시 로그인해 주세요.'
+    };
+  }
+
+  if (
+    rawCode === 'unavailable' ||
+    rawCode === 'deadline-exceeded' ||
+    rawCode === 'aborted' ||
+    lowerMessage.includes('network') ||
+    lowerMessage.includes('offline') ||
+    lowerMessage.includes('failed to fetch') ||
+    (typeof navigator !== 'undefined' && navigator.onLine === false)
+  ) {
+    return {
+      code: 'network',
+      message: '네트워크 연결이 원활하지 않아 피드백 읽음 상태를 동기화하지 못했습니다.'
+    };
+  }
+
+  if (rawCode === 'invalid-argument') {
+    return {
+      code: 'invalid-argument',
+      message: rawMessage || '유효하지 않은 피드백 읽음 상태 요청입니다.'
+    };
+  }
+
+  if (rawCode === 'not-found') {
+    return {
+      code: 'not-found',
+      message: rawMessage || '대상 피드백 정보를 찾을 수 없습니다.'
+    };
+  }
+
+  return {
+    code: 'unknown',
+    message: rawMessage || '피드백 읽음 상태 처리 중 알 수 없는 오류가 발생했습니다.'
+  };
+}
+
+/**
+ * 신규 알림 대상 피드백 여부 판별
+ * - 3-A 이후 새로 생성되어 notificationEligible === true가 명시된 피드백만 신규 알림 대상
+ * - 기존 과거 피드백(필드 미존재)은 알림 대상에서 자동 제외
+ */
+export function isFeedbackNotificationEligible(feedback: ClinicalFeedback | null | undefined): boolean {
+  return Boolean(feedback && feedback.notificationEligible === true);
+}
+
+/**
+ * 읽음 상태 배열을 feedbackId 기준 조회 맵으로 변환
+ */
+export function buildFeedbackReadStateMap(
+  readStates: FeedbackReadState[]
+): Record<string, FeedbackReadState> {
+  const map: Record<string, FeedbackReadState> = {};
+  for (const state of readStates) {
+    if (state && typeof state.feedbackId === 'string' && state.feedbackId) {
+      map[state.feedbackId] = state;
+    }
+  }
+  return map;
+}
+
+/**
+ * 특정 피드백의 읽음 여부 판별
+ */
+export function isFeedbackRead(
+  feedbackId: string,
+  readSource: FeedbackReadState[] | Record<string, FeedbackReadState> | Set<string>
+): boolean {
+  if (!feedbackId) return false;
+  if (readSource instanceof Set) {
+    return readSource.has(feedbackId);
+  }
+  if (Array.isArray(readSource)) {
+    return readSource.some((item) => item?.feedbackId === feedbackId);
+  }
+  return Boolean(readSource[feedbackId]);
+}
+
+/**
+ * 3-B단계 알림 판별용 순수 헬퍼:
+ * - 신규 알림 대상(notificationEligible === true)이면서 읽음 상태 문서가 없는 피드백만 최신순 반환
+ */
+export function getUnreadNotificationFeedbacks(
+  feedbacks: ClinicalFeedback[],
+  readStates: FeedbackReadState[]
+): ClinicalFeedback[] {
+  const readIdSet = new Set(
+    (readStates || [])
+      .filter((item) => item && typeof item.feedbackId === 'string' && item.feedbackId)
+      .map((item) => item.feedbackId)
+  );
+
+  return (feedbacks || [])
+    .filter((fb) => isFeedbackNotificationEligible(fb) && !readIdSet.has(fb.id))
+    .sort(
+      (a, b) =>
+        new Date(b.createdAt || b.date || 0).getTime() -
+        new Date(a.createdAt || a.date || 0).getTime()
+    );
 }
 
 export const FirebaseService = {
@@ -656,49 +807,175 @@ export const FirebaseService = {
   },
 
   /**
-   * 물리치료사의 임상 소견 피드백 Firestore 저장 (Requirement 1, 2, 5)
+   * 물리치료사의 임상 소견 피드백 Firestore 원자적 저장 (Requirement 1, 2, 5 + Stage 3-A 보완)
+   * - runTransaction()으로 feedbacks/{feedbackId} 생성과 users/{patientId}.feedbacks 갱신을 단일 원자 커밋으로 처리
+   * - 모든 읽기(users/{patientId})를 쓰기보다 먼저 수행하여 트랜잭션 규칙 및 동시성 경합 안전성 확보
+   * - feedbacks/{feedbackId} 미존재 문서에 대한 불필요한 get을 생략해 기존 보안 규칙(resource.data.patientId)과 완전 호환
+   * - 실패 시 두 저장 경로 모두 반영되지 않으며 오류를 상위로 전파
    */
   async saveFeedback(patientId: string, feedback: ClinicalFeedback, therapistId: string): Promise<boolean> {
+    assertFirestoreWriteAllowed('임상 피드백 저장');
+
     const db = getFirebaseFirestore();
-    if (!db) return false;
+    if (!db) {
+      const err: any = new Error('Firestore 인스턴스를 초기화할 수 없습니다. Firebase 설정을 확인해 주세요.');
+      err.code = 'unavailable';
+      throw err;
+    }
 
-    const feedbackPath = `feedbacks/${feedback.id}`;
+    const cleanPatientId = typeof patientId === 'string' ? patientId.trim() : '';
+    const cleanFeedbackId = typeof feedback?.id === 'string' ? feedback.id.trim() : '';
+    const trimmedContent = typeof feedback?.content === 'string' ? feedback.content.trim() : '';
+
+    if (!cleanPatientId || !VALID_FIRESTORE_DOC_ID_REGEX.test(cleanPatientId)) {
+      const err: any = new Error('유효한 환자 ID가 필요합니다.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    if (!cleanFeedbackId || !VALID_FIRESTORE_DOC_ID_REGEX.test(cleanFeedbackId)) {
+      const err: any = new Error('유효한 피드백 ID가 필요합니다.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+    if (!trimmedContent) {
+      const err: any = new Error('피드백 내용을 입력해 주세요.');
+      err.code = 'invalid-argument';
+      throw err;
+    }
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      const err: any = new Error('Firebase 인증 세션이 확인되지 않았습니다. 다시 로그인한 후 시도해 주세요.');
+      err.code = 'unauthenticated';
+      throw err;
+    }
+    if (therapistId && therapistId.trim() && therapistId.trim() !== authUid) {
+      const err: any = new Error('인증된 물리치료사 계정과 작성자 ID가 일치하지 않습니다.');
+      err.code = 'permission-denied';
+      throw err;
+    }
+
+    const verifiedTherapistId = authUid;
+    const createdAt = feedback.createdAt || new Date().toISOString();
+    const normalizedWorkoutLogId =
+      typeof feedback.workoutLogId === 'string' && feedback.workoutLogId.trim()
+        ? feedback.workoutLogId.trim()
+        : undefined;
+    const trimmedRecommendation =
+      typeof feedback.recommendation === 'string' ? feedback.recommendation.trim() : '';
+
+    const feedbackRecord: ClinicalFeedback = {
+      id: cleanFeedbackId,
+      date: feedback.date,
+      therapistId: verifiedTherapistId,
+      therapistName: feedback.therapistName || '담당 물리치료사',
+      content: trimmedContent,
+      ...(trimmedRecommendation ? { recommendation: trimmedRecommendation } : {}),
+      createdAt,
+      ...(normalizedWorkoutLogId ? { workoutLogId: normalizedWorkoutLogId } : {}),
+      ...(typeof feedback.notificationEligible === 'boolean'
+        ? { notificationEligible: feedback.notificationEligible }
+        : {})
+    };
+
+    const feedbackDocPayload: Record<string, any> = {
+      id: feedbackRecord.id,
+      date: feedbackRecord.date,
+      patientId: cleanPatientId,
+      therapistId: verifiedTherapistId,
+      therapistName: feedbackRecord.therapistName,
+      content: feedbackRecord.content,
+      recommendation: trimmedRecommendation,
+      createdAt
+    };
+    if (normalizedWorkoutLogId) {
+      feedbackDocPayload.workoutLogId = normalizedWorkoutLogId;
+    }
+    if (typeof feedbackRecord.notificationEligible === 'boolean') {
+      feedbackDocPayload.notificationEligible = feedbackRecord.notificationEligible;
+    }
+
+    const feedbackRef = doc(db, 'feedbacks', cleanFeedbackId);
+    const userRef = doc(db, 'users', cleanPatientId);
+
     try {
-      assertFirestoreWriteAllowed('임상 피드백 저장');
-      const feedbackRecord: ClinicalFeedback = {
-        ...feedback,
-        therapistId,
-        therapistName: feedback.therapistName || '담당 물리치료사'
-      };
+      await runTransaction(db, async (transaction) => {
+        // 1. 트랜잭션 읽기 단계 (모든 읽기는 쓰기보다 먼저 수행)
+        const userSnap = await transaction.get(userRef);
+        if (!userSnap.exists()) {
+          const notFoundErr: any = new Error('환자 프로필 문서를 찾을 수 없어 피드백을 저장할 수 없습니다.');
+          notFoundErr.code = 'not-found';
+          throw notFoundErr;
+        }
 
-      const feedbackRef = doc(db, 'feedbacks', feedback.id);
-      await setDoc(feedbackRef, {
-        id: feedbackRecord.id,
-        date: feedbackRecord.date,
-        patientId,
-        therapistId,
-        therapistName: feedbackRecord.therapistName,
-        content: feedbackRecord.content,
-        recommendation: feedbackRecord.recommendation || '',
-        createdAt: new Date().toISOString()
+        const userData = userSnap.data();
+        const existingFeedbacks = Array.isArray(userData.feedbacks) ? userData.feedbacks : [];
+        if (existingFeedbacks.some((item: any) => item?.id === feedbackRecord.id)) {
+          const dupErr: any = new Error('이미 동일한 ID로 등록된 피드백이 존재합니다. 다시 시도해 주세요.');
+          dupErr.code = 'already-exists';
+          throw dupErr;
+        }
+
+        const updatedAt = new Date().toISOString();
+
+        // 2. 트랜잭션 쓰기 단계 (feedbacks/{feedbackId} 생성 + users/{patientId}.feedbacks 갱신 원자 커밋)
+        transaction.set(feedbackRef, feedbackDocPayload);
+        transaction.update(userRef, {
+          feedbacks: [feedbackRecord, ...existingFeedbacks],
+          updatedAt
+        });
       });
 
-      // 환자 문서의 feedbacks 배열에도 올바른 therapistId와 therapistName이 포함된 피드백 반영
-      const userRef = doc(db, 'users', patientId);
-      const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        const userData = userSnap.data();
-        const existing = userData.feedbacks || [];
-        await updateDoc(userRef, {
-          feedbacks: [feedbackRecord, ...existing],
-          updatedAt: new Date().toISOString()
-        });
+      return true;
+    } catch (error: any) {
+      console.error('[Firestore Error] saveFeedback transaction failed:', error);
+      const rawCode = String(error?.code || '').toLowerCase();
+      const rawMessage = String(error?.message || '');
+      const lowerMessage = rawMessage.toLowerCase();
+
+      if (
+        rawCode === 'not-found' ||
+        rawCode === 'already-exists' ||
+        rawCode === 'invalid-argument' ||
+        rawCode === 'unauthenticated'
+      ) {
+        throw error;
       }
 
-      return true;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, feedbackPath);
-      return false;
+      if (
+        rawCode === 'permission-denied' ||
+        lowerMessage.includes('permission-denied') ||
+        lowerMessage.includes('insufficient permissions')
+      ) {
+        const permErr: any = new Error(
+          rawMessage.includes('[안전장치 차단]')
+            ? rawMessage
+            : '임상 피드백을 저장할 권한이 없습니다. 치료사 인증 및 환자 연결 상태를 확인해 주세요.'
+        );
+        permErr.code = 'permission-denied';
+        throw permErr;
+      }
+
+      if (
+        rawCode === 'unavailable' ||
+        rawCode === 'deadline-exceeded' ||
+        rawCode === 'aborted' ||
+        lowerMessage.includes('offline') ||
+        lowerMessage.includes('network') ||
+        (typeof navigator !== 'undefined' && navigator.onLine === false)
+      ) {
+        const netErr: any = new Error(
+          '네트워크 오류 또는 일시적 충돌로 피드백 저장을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+        );
+        netErr.code = 'unavailable';
+        throw netErr;
+      }
+
+      const fallbackErr: any = new Error(
+        rawMessage || '임상 피드백을 서버에 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.'
+      );
+      fallbackErr.code = rawCode || 'unknown';
+      throw fallbackErr;
     }
   },
 
@@ -717,11 +994,192 @@ export const FirebaseService = {
       snap.forEach((d) => {
         feedbacks.push(d.data() as ClinicalFeedback);
       });
-      return feedbacks.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return feedbacks.sort(
+        (a, b) =>
+          new Date(b.createdAt || b.date || 0).getTime() -
+          new Date(a.createdAt || a.date || 0).getTime()
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, path);
       return [];
     }
+  },
+
+  /**
+   * 환자별 피드백 읽음 상태 목록 조회 (Stage 3-A)
+   * - 경로: users/{patientId}/feedbackReadStates
+   * - 로그인한 환자 본인(authUid === patientId)만 조회 가능
+   * - Firestore 오류 시 빈 목록으로 위장하지 않고 원인별 FeedbackReadStateError 전달
+   */
+  async getFeedbackReadStates(patientId: string): Promise<FeedbackReadState[]> {
+    const db = getFirebaseFirestore();
+    const cleanPatientId = typeof patientId === 'string' ? patientId.trim() : '';
+
+    if (!cleanPatientId || !VALID_FIRESTORE_DOC_ID_REGEX.test(cleanPatientId)) {
+      throw new FeedbackReadStateError('invalid-argument', '유효한 환자 ID가 필요합니다.');
+    }
+    if (!db) {
+      throw new FeedbackReadStateError('network', 'Firestore 인스턴스를 초기화할 수 없습니다.');
+    }
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      throw new FeedbackReadStateError('unauthenticated', '로그인 인증 세션을 확인할 수 없습니다.');
+    }
+    if (authUid !== cleanPatientId) {
+      throw new FeedbackReadStateError(
+        'permission-denied',
+        '환자 본인만 자신의 피드백 읽음 상태를 조회할 수 있습니다.'
+      );
+    }
+
+    try {
+      const readStatesRef = collection(db, 'users', cleanPatientId, 'feedbackReadStates');
+      const snap = await getDocs(readStatesRef);
+      const states: FeedbackReadState[] = [];
+      snap.forEach((docSnap) => {
+        const data = docSnap.data();
+        states.push({
+          feedbackId: typeof data.feedbackId === 'string' && data.feedbackId ? data.feedbackId : docSnap.id,
+          readAt: (data.readAt as Timestamp) || null
+        });
+      });
+      return states;
+    } catch (error) {
+      const classified = classifyFeedbackReadError(error);
+      throw new FeedbackReadStateError(classified.code, classified.message, error);
+    }
+  },
+
+  /**
+   * 환자별 피드백 읽음 상태 조회 맵 반환 (feedbackId -> FeedbackReadState)
+   */
+  async getFeedbackReadStateMap(patientId: string): Promise<Record<string, FeedbackReadState>> {
+    const states = await this.getFeedbackReadStates(patientId);
+    return buildFeedbackReadStateMap(states);
+  },
+
+  /**
+   * 특정 피드백 읽음 처리 영구 저장 (Stage 3-A, create-only + 멱등성 보장)
+   * - 경로: users/{patientId}/feedbackReadStates/{feedbackId}
+   * - 저장 필드: { feedbackId, readAt: serverTimestamp() } 만 기록
+   * - 원본 feedbacks/{feedbackId} 및 users/{patientId}.feedbacks 문서는 절대 수정하지 않음
+   * - 이미 읽음 문서가 존재하면 중복 쓰기 없이 멱등 성공 반환
+   * - 로그인·목록 조회·나중에 보기 시 자동 호출 금지 (3-B에서 실제 상세 확인 시에만 호출)
+   */
+  async markFeedbackAsRead(
+    patientId: string,
+    feedbackId: string
+  ): Promise<{ readState: FeedbackReadState; alreadyRead: boolean }> {
+    const db = getFirebaseFirestore();
+    const cleanPatientId = typeof patientId === 'string' ? patientId.trim() : '';
+    const cleanFeedbackId = typeof feedbackId === 'string' ? feedbackId.trim() : '';
+
+    if (!cleanPatientId || !VALID_FIRESTORE_DOC_ID_REGEX.test(cleanPatientId)) {
+      throw new FeedbackReadStateError('invalid-argument', '유효한 환자 ID가 필요합니다.');
+    }
+    if (!cleanFeedbackId || !VALID_FIRESTORE_DOC_ID_REGEX.test(cleanFeedbackId)) {
+      throw new FeedbackReadStateError('invalid-argument', '유효한 피드백 ID가 필요합니다.');
+    }
+    if (!db) {
+      throw new FeedbackReadStateError('network', 'Firestore 인스턴스를 초기화할 수 없습니다.');
+    }
+
+    assertFirestoreWriteAllowed('피드백 읽음 상태 저장');
+
+    const authUid = await waitForFirebaseAuthUid();
+    if (!authUid) {
+      throw new FeedbackReadStateError('unauthenticated', '로그인 인증 세션을 확인할 수 없습니다.');
+    }
+    if (authUid !== cleanPatientId) {
+      throw new FeedbackReadStateError(
+        'permission-denied',
+        '환자 본인만 자신의 피드백 읽음 상태를 저장할 수 있습니다.'
+      );
+    }
+
+    const readRef = doc(db, 'users', cleanPatientId, 'feedbackReadStates', cleanFeedbackId);
+
+    // 1. 사전 조회로 멱등성 보장 (create-only 보안 규칙 하에서 이미 읽은 항목의 중복 쓰기 방지)
+    try {
+      const existingSnap = await getDoc(readRef);
+      if (existingSnap.exists()) {
+        const existingData = existingSnap.data();
+        return {
+          alreadyRead: true,
+          readState: {
+            feedbackId:
+              typeof existingData.feedbackId === 'string' && existingData.feedbackId
+                ? existingData.feedbackId
+                : cleanFeedbackId,
+            readAt: (existingData.readAt as Timestamp) || null
+          }
+        };
+      }
+    } catch (readErr) {
+      const classified = classifyFeedbackReadError(readErr);
+      throw new FeedbackReadStateError(classified.code, classified.message, readErr);
+    }
+
+    // 2. 최초 읽음 상태 문서 생성 (허용 필드: feedbackId, readAt 서버 타임스탬프)
+    try {
+      await setDoc(readRef, {
+        feedbackId: cleanFeedbackId,
+        readAt: serverTimestamp()
+      });
+    } catch (writeErr: any) {
+      // 동시 다중 탭/요청으로 인해 직전 생성되어 create-only 규칙에서 permission-denied가 난 경우 재확인
+      if (writeErr?.code === 'permission-denied') {
+        try {
+          const verifySnap = await getDoc(readRef);
+          if (verifySnap.exists()) {
+            const verifyData = verifySnap.data();
+            return {
+              alreadyRead: true,
+              readState: {
+                feedbackId:
+                  typeof verifyData.feedbackId === 'string' && verifyData.feedbackId
+                    ? verifyData.feedbackId
+                    : cleanFeedbackId,
+                readAt: (verifyData.readAt as Timestamp) || null
+              }
+            };
+          }
+        } catch {
+          // 재확인 실패 시 원래 permission-denied 오류 반환
+        }
+      }
+      const classified = classifyFeedbackReadError(writeErr);
+      throw new FeedbackReadStateError(classified.code, classified.message, writeErr);
+    }
+
+    // 3. 저장 성공 직후 서버 타임스탬프가 반영된 문서 조회 (조회 실패 시에도 생성 완료 상태 반환)
+    try {
+      const savedSnap = await getDoc(readRef);
+      if (savedSnap.exists()) {
+        const savedData = savedSnap.data();
+        return {
+          alreadyRead: false,
+          readState: {
+            feedbackId:
+              typeof savedData.feedbackId === 'string' && savedData.feedbackId
+                ? savedData.feedbackId
+                : cleanFeedbackId,
+            readAt: (savedData.readAt as Timestamp) || null
+          }
+        };
+      }
+    } catch {
+      // 쓰기 커밋 성공 이후 후속 읽기 지연 시 로컬 타임스탬프 폴백
+    }
+
+    return {
+      alreadyRead: false,
+      readState: {
+        feedbackId: cleanFeedbackId,
+        readAt: Timestamp.now()
+      }
+    };
   },
 
   /**

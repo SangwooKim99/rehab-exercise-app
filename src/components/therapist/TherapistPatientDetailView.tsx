@@ -3,18 +3,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { Patient, AuthUser, formatPatientDiagnosis } from '../../types/rehab';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Patient, AuthUser, WorkoutLog, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { FirebaseService } from '../../services/firebaseService';
 import { getFirebaseAuth } from '../../services/firebase';
 import { formatTherapistDisplayName, getFeedbackAuthorDisplayName } from '../../services/authService';
-import { AlertTriangle, ArrowLeft, ArrowUpRight, FileEdit, Send, UserX, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowUpRight,
+  FileEdit,
+  Loader2,
+  MessageSquare,
+  Send,
+  UserX,
+  Video,
+  X
+} from 'lucide-react';
 import { TherapistVideoReviewSection } from './TherapistVideoReviewSection';
-import { PatientEvaluationSection } from './PatientEvaluationSection';
 import { PatientSoapSection } from './PatientSoapSection';
 import { DisconnectConfirmModal } from '../common/DisconnectConfirmModal';
 import { EditDiagnosisModal } from '../common/EditDiagnosisModal';
+
+type ChartTab = 'info' | 'soap' | 'activity';
+type ActivitySubTab = 'logs' | 'videos' | 'feedback';
 
 interface TherapistPatientDetailViewProps {
   patient: Patient;
@@ -25,10 +38,11 @@ interface TherapistPatientDetailViewProps {
   onPatientDisconnected?: (patientName: string) => void;
   onPatientUpdated?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  initialTab?: ChartTab;
+  initialActivitySubTab?: ActivitySubTab;
+  targetWorkoutLogId?: string | null;
+  navigationRequestKey?: number;
 }
-
-type ChartTab = 'info' | 'evaluation' | 'soap' | 'activity';
-type ActivitySubTab = 'logs' | 'videos' | 'feedback';
 
 function getConnectionStatusDisplay(status: string): { label: string; textClass: string } {
   switch (status) {
@@ -53,10 +67,25 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
   currentUser,
   onPatientDisconnected,
   onPatientUpdated,
-  onDirtyChange
+  onDirtyChange,
+  initialTab,
+  initialActivitySubTab,
+  targetWorkoutLogId,
+  navigationRequestKey
 }) => {
-  const [activeTab, setActiveTab] = useState<ChartTab>('info');
-  const [activitySubTab, setActivitySubTab] = useState<ActivitySubTab>('logs');
+  const [activeTab, setActiveTab] = useState<ChartTab>(initialTab || 'info');
+  const [activitySubTab, setActivitySubTab] = useState<ActivitySubTab>(
+    initialActivitySubTab || 'logs'
+  );
+  const [selectedWorkoutLogId, setSelectedWorkoutLogId] = useState<string | null>(
+    targetWorkoutLogId || null
+  );
+  const [requestedTargetLogId, setRequestedTargetLogId] = useState<string | null>(
+    targetWorkoutLogId || null
+  );
+  const [selectedVideoSubmissionId, setSelectedVideoSubmissionId] = useState<string | null>(null);
+  const [remoteLogs, setRemoteLogs] = useState<WorkoutLog[]>([]);
+  const [isLoadingRemoteLogs, setIsLoadingRemoteLogs] = useState<boolean>(false);
   const [showEditDiagnosisModal, setShowEditDiagnosisModal] = useState<boolean>(false);
   const [hasUnsavedSoapChanges, setHasUnsavedSoapChanges] = useState<boolean>(false);
   const [pendingChartExitAction, setPendingChartExitAction] = useState<
@@ -65,35 +94,8 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
     | null
   >(null);
 
-  const handleSoapDirtyChange = useCallback(
-    (dirty: boolean) => {
-      setHasUnsavedSoapChanges(dirty);
-      onDirtyChange?.(dirty);
-    },
-    [onDirtyChange]
-  );
-
-  useEffect(() => {
-    setHasUnsavedSoapChanges(false);
-    setPendingChartExitAction(null);
-    onDirtyChange?.(false);
-    return () => {
-      onDirtyChange?.(false);
-    };
-  }, [patient.id, onDirtyChange]);
-
-  const library = StorageService.getExerciseLibrary();
-  const logs = StorageService.getWorkoutLogs(patient.id);
-  const submittedVideos = StorageService.getVideoSubmissions(patient.id);
-  const pendingVideosCount = submittedVideos.filter((v) => v.status === 'pending_review').length;
-
-  // 실제 Firestore connection 상태 우선 반영 (pending, connected, rejected, disconnected)
-  const activeConnection = StorageService.getActiveConnection(patient.id, currentUser);
-  const connectionStatus = activeConnection?.status || patient.connectionStatus || 'not_connected';
-  const isConnected = connectionStatus === 'connected';
-  const isDisconnected = connectionStatus === 'disconnected';
-  const statusDisplay = getConnectionStatusDisplay(connectionStatus);
-  const connectionId = activeConnection?.connectionId || (isDisconnected ? '연결 해제됨' : undefined);
+  const lastPrefilledLogIdRef = useRef<string | null>(null);
+  const selectedLogDetailRef = useRef<HTMLDivElement | null>(null);
 
   // 연결 해제 모달 상태
   const [isDisconnectModalOpen, setIsDisconnectModalOpen] = useState<boolean>(false);
@@ -105,6 +107,161 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
   const [feedbackSuccessMsg, setFeedbackSuccessMsg] = useState<string>('');
   const [isSavingFeedback, setIsSavingFeedback] = useState<boolean>(false);
   const [feedbackErrorMsg, setFeedbackErrorMsg] = useState<string>('');
+
+  const handleSoapDirtyChange = useCallback(
+    (dirty: boolean) => {
+      setHasUnsavedSoapChanges(dirty);
+      onDirtyChange?.(dirty);
+    },
+    [onDirtyChange]
+  );
+
+  // 환자 전환 시 이전 환자의 초안/선택/원격 로그 상태 초기화
+  useEffect(() => {
+    setHasUnsavedSoapChanges(false);
+    setPendingChartExitAction(null);
+    setNewFeedbackContent('');
+    setNewRecommendation('');
+    setFeedbackSuccessMsg('');
+    setFeedbackErrorMsg('');
+    setSelectedVideoSubmissionId(null);
+    lastPrefilledLogIdRef.current = null;
+    onDirtyChange?.(false);
+    return () => {
+      onDirtyChange?.(false);
+    };
+  }, [patient.id, onDirtyChange]);
+
+  // 외부 네비게이션 요청(예: 대시보드 최근 운동 수행 기록 클릭)에 따른 탭·대상 기록 동기화
+  useEffect(() => {
+    setActiveTab(initialTab || 'info');
+    setActivitySubTab(initialActivitySubTab || 'logs');
+    setSelectedWorkoutLogId(targetWorkoutLogId || null);
+    setRequestedTargetLogId(targetWorkoutLogId || null);
+    setSelectedVideoSubmissionId(null);
+    lastPrefilledLogIdRef.current = null;
+  }, [patient.id, initialTab, initialActivitySubTab, targetWorkoutLogId, navigationRequestKey]);
+
+  const library = StorageService.getExerciseLibrary();
+  const localLogs = StorageService.getWorkoutLogs(patient.id);
+  const submittedVideos = StorageService.getVideoSubmissions(patient.id);
+  const pendingVideosCount = submittedVideos.filter((v) => v.status === 'pending_review').length;
+
+  // 실제 Firestore connection 상태 우선 반영 (pending, connected, rejected, disconnected)
+  const activeConnection = StorageService.getActiveConnection(patient.id, currentUser);
+  const connectionStatus = activeConnection?.status || patient.connectionStatus || 'not_connected';
+  const isConnected = connectionStatus === 'connected';
+  const isDisconnected = connectionStatus === 'disconnected';
+  const statusDisplay = getConnectionStatusDisplay(connectionStatus);
+  const connectionId = activeConnection?.connectionId || (isDisconnected ? '연결 해제됨' : undefined);
+
+  // 비동기 Firestore 수행 기록 조회(읽기 전용)로 로컬 캐시에 아직 없는 기록도 안전하게 매칭
+  useEffect(() => {
+    let isCancelled = false;
+    setRemoteLogs([]);
+
+    if (!isConnected || !patient.id) {
+      setIsLoadingRemoteLogs(false);
+      return;
+    }
+
+    const auth = getFirebaseAuth();
+    if (!auth?.currentUser) {
+      setIsLoadingRemoteLogs(false);
+      return;
+    }
+
+    setIsLoadingRemoteLogs(true);
+    FirebaseService.getWorkoutLogs(patient.id)
+      .then((fetched) => {
+        if (isCancelled) return;
+        const validPatientLogs = (fetched || []).filter(
+          (item) => item && typeof item.id === 'string' && item.patientId === patient.id
+        );
+        setRemoteLogs(validPatientLogs);
+      })
+      .catch((err) => {
+        if (isCancelled) return;
+        console.warn('Async workout logs lookup deferred:', err);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsLoadingRemoteLogs(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [patient.id, isConnected]);
+
+  // 현재 환자(patient.id)의 로컬·원격 수행 기록을 고유 ID(log.id) 기준으로 병합
+  const logs = useMemo(() => {
+    const byId = new Map<string, WorkoutLog>();
+    for (const item of remoteLogs) {
+      if (item && item.id && item.patientId === patient.id) {
+        byId.set(item.id, item);
+      }
+    }
+    for (const item of localLogs) {
+      if (item && item.id && item.patientId === patient.id) {
+        byId.set(item.id, item);
+      }
+    }
+    return Array.from(byId.values()).sort(
+      (a, b) => new Date(b.loggedAt).getTime() - new Date(a.loggedAt).getTime()
+    );
+  }, [localLogs, remoteLogs, patient.id]);
+
+  // 클릭/전달된 고유 log.id로 정확한 단일 회차 기록 식별 (다른 환자 기록 절대 차단)
+  const selectedLog = useMemo(() => {
+    if (!selectedWorkoutLogId) return null;
+    return logs.find((item) => item.id === selectedWorkoutLogId && item.patientId === patient.id) || null;
+  }, [logs, selectedWorkoutLogId, patient.id]);
+
+  const isWaitingForTargetLog =
+    Boolean(requestedTargetLogId) && !selectedLog && isLoadingRemoteLogs;
+  const isTargetLogNotFound =
+    Boolean(requestedTargetLogId) && !selectedLog && !isLoadingRemoteLogs;
+
+  // 선택된 운동 기록이 확정되면 기존 피드백 작성 컨텍스트 1회 자동 채움
+  useEffect(() => {
+    if (!selectedLog) return;
+    if (lastPrefilledLogIdRef.current === selectedLog.id) return;
+    lastPrefilledLogIdRef.current = selectedLog.id;
+    const painScore = selectedLog.postPainLevel ?? selectedLog.painLevel;
+    setNewFeedbackContent(
+      `[${selectedLog.date} ${selectedLog.exerciseName}] 통증 NRS ${painScore}/10 확인했습니다. `
+    );
+    setFeedbackErrorMsg('');
+  }, [selectedLog?.id, navigationRequestKey]);
+
+  // 선택된 운동 기록 상세 영역으로 자연스럽게 스크롤
+  useEffect(() => {
+    if (activeTab === 'activity' && activitySubTab === 'logs' && selectedLog?.id) {
+      selectedLogDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [activeTab, activitySubTab, selectedLog?.id]);
+
+  const handleSelectWorkoutLog = (log: WorkoutLog) => {
+    if (log.patientId !== patient.id) return;
+    setSelectedWorkoutLogId(log.id);
+    setRequestedTargetLogId(null);
+    setFeedbackSuccessMsg('');
+    setFeedbackErrorMsg('');
+    if (lastPrefilledLogIdRef.current === log.id && !newFeedbackContent.trim()) {
+      const painScore = log.postPainLevel ?? log.painLevel;
+      setNewFeedbackContent(
+        `[${log.date} ${log.exerciseName}] 통증 NRS ${painScore}/10 확인했습니다. `
+      );
+    }
+  };
+
+  const handleClearSelectedWorkoutLog = () => {
+    setSelectedWorkoutLogId(null);
+    setRequestedTargetLogId(null);
+    lastPrefilledLogIdRef.current = null;
+  };
 
   const handleRequestTabSwitch = (nextTab: ChartTab) => {
     if (nextTab === activeTab) return;
@@ -148,7 +305,10 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
     }
   };
 
-  const handleSaveFeedback = async (e: React.FormEvent) => {
+  const handleSaveFeedback = async (
+    e: React.FormEvent,
+    contextLog?: WorkoutLog | null
+  ) => {
     e.preventDefault();
     if (!newFeedbackContent.trim() || isDisconnected) return;
 
@@ -157,7 +317,19 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
       return;
     }
 
+    let linkedWorkoutLogId: string | undefined;
+    if (contextLog) {
+      if (!contextLog.id || contextLog.patientId !== patient.id) {
+        setFeedbackErrorMsg(
+          '선택한 운동 수행 기록이 현재 환자의 기록과 일치하지 않아 피드백을 저장할 수 없습니다.'
+        );
+        return;
+      }
+      linkedWorkoutLogId = contextLog.id;
+    }
+
     setIsSavingFeedback(true);
+    setFeedbackSuccessMsg('');
     setFeedbackErrorMsg('');
 
     try {
@@ -186,7 +358,8 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
         patient.id,
         {
           content: newFeedbackContent,
-          recommendation: newRecommendation
+          recommendation: newRecommendation,
+          ...(linkedWorkoutLogId ? { workoutLogId: linkedWorkoutLogId } : {})
         },
         formattedName,
         therapistUid
@@ -206,7 +379,6 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
 
   const mainTabs: { id: ChartTab; label: string }[] = [
     { id: 'info', label: '기본 정보' },
-    { id: 'evaluation', label: '평가 기록' },
     { id: 'soap', label: 'SOAP 노트' },
     { id: 'activity', label: '운동 기록' }
   ];
@@ -222,6 +394,159 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
     },
     { id: 'feedback', label: `피드백 (${patient.feedbacks?.length || 0})` }
   ];
+
+  // 기존 임상 피드백 작성 폼 재사용 렌더러 (기존 StorageService.addClinicalFeedback -> FirebaseService.saveFeedback 경로 유지)
+  const renderClinicalFeedbackForm = (
+    idPrefix: string,
+    headingText: string = '임상 피드백 작성',
+    contextLog?: WorkoutLog | null
+  ) => (
+    <section className="space-y-4">
+      <h2 className="text-base font-semibold text-gray-900">{headingText}</h2>
+
+      {feedbackSuccessMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 font-medium">
+          {feedbackSuccessMsg}
+        </div>
+      )}
+
+      {feedbackErrorMsg && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-900 font-medium">
+          {feedbackErrorMsg}
+        </div>
+      )}
+
+      <form onSubmit={(e) => handleSaveFeedback(e, contextLog)} className="space-y-4">
+        <div>
+          <label
+            htmlFor={`${idPrefix}-feedback-content`}
+            className="text-xs font-medium text-gray-700 block mb-1.5"
+          >
+            운동 소견 및 지도 코멘트 <span className="text-rose-500">*</span>
+          </label>
+          <textarea
+            id={`${idPrefix}-feedback-content`}
+            value={newFeedbackContent}
+            onChange={(e) => setNewFeedbackContent(e.target.value)}
+            disabled={isDisconnected || isSavingFeedback}
+            placeholder="예: 수행 기록상 브리지 시 통증(NRS 1)이 양호합니다. 허리 과신전에 계속 주의하며 호흡을 유지하세요."
+            rows={3}
+            className="w-full text-sm p-3 rounded-lg border border-gray-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 disabled:bg-gray-50 disabled:text-gray-400"
+            required
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor={`${idPrefix}-feedback-recommendation`}
+            className="text-xs font-medium text-gray-700 block mb-1.5"
+          >
+            권장 처방 및 일상 수칙 (선택)
+          </label>
+          <input
+            id={`${idPrefix}-feedback-recommendation`}
+            type="text"
+            value={newRecommendation}
+            onChange={(e) => setNewRecommendation(e.target.value)}
+            disabled={isDisconnected || isSavingFeedback}
+            placeholder="예: 내일도 동일 세트 수로 진행하시고 1시간 좌식 후 기립 스트레칭을 병행하세요."
+            className="w-full text-sm p-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 disabled:bg-gray-50 disabled:text-gray-400"
+          />
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={isSavingFeedback || isDisconnected}
+            className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>
+              {isSavingFeedback ? '피드백 전송 중...' : '피드백 전송 및 차트 저장'}
+            </span>
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+
+  // 기존 임상 피드백 이력 재사용 렌더러
+  const renderFeedbackHistory = (contextLog?: WorkoutLog | null) => {
+    const feedbacks = patient.feedbacks || [];
+    const contextTag = contextLog ? `[${contextLog.date} ${contextLog.exerciseName}]` : '';
+    const isFeedbackMatchedToContext = (fb: (typeof feedbacks)[number]): boolean => {
+      if (!contextLog) return false;
+      if (fb.workoutLogId) {
+        return fb.workoutLogId === contextLog.id;
+      }
+      return Boolean(contextTag && fb.content.includes(contextTag));
+    };
+    const matchingCount = contextLog
+      ? feedbacks.filter((fb) => isFeedbackMatchedToContext(fb)).length
+      : 0;
+
+    return (
+      <section className="pt-6 border-t border-gray-200 space-y-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h2 className="text-base font-semibold text-gray-900">
+            피드백 이력 ({feedbacks.length}건)
+          </h2>
+          {contextLog && matchingCount > 0 && (
+            <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-md">
+              이 기록 관련 피드백 {matchingCount}건 작성됨
+            </span>
+          )}
+        </div>
+
+        {feedbacks.length === 0 ? (
+          <p className="py-8 text-center text-sm text-gray-500 border-t border-b border-gray-100">
+            아직 등록된 피드백이 없습니다.
+          </p>
+        ) : (
+          <div className="divide-y divide-gray-100 border-t border-b border-gray-200">
+            {feedbacks.map((fb) => {
+              const isExactLinked = Boolean(contextLog && fb.workoutLogId === contextLog.id);
+              const isRelatedToSelectedLog = isFeedbackMatchedToContext(fb);
+              return (
+                <div
+                  key={fb.id}
+                  className={`py-4 space-y-1.5 text-sm ${
+                    isRelatedToSelectedLog ? 'bg-blue-50/40 -mx-3 px-3 rounded-lg' : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-gray-900">
+                        {getFeedbackAuthorDisplayName(fb, patient)}
+                      </span>
+                      {isExactLinked ? (
+                        <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                          이 기록 연결됨
+                        </span>
+                      ) : isRelatedToSelectedLog ? (
+                        <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                          이 기록 관련
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-xs text-gray-400 font-mono tabular-nums">
+                      {fb.date}
+                    </span>
+                  </div>
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{fb.content}</p>
+                  {fb.recommendation && (
+                    <p className="text-xs text-blue-700 pt-0.5">
+                      권장 사항: {fb.recommendation}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    );
+  };
 
   return (
     <div className="max-w-5xl mx-auto pb-16">
@@ -295,7 +620,7 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
           </div>
         )}
 
-        {/* 2. 얇은 밑줄형 4개 탭 */}
+        {/* 2. 얇은 밑줄형 3개 탭 */}
         <nav className="flex items-center gap-8 border-b border-gray-200" aria-label="환자 차트 섹션">
           {mainTabs.map((tab) => {
             const isActive = activeTab === tab.id;
@@ -455,12 +780,7 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
             </div>
           )}
 
-          {/* Tab 2: 평가 기록 */}
-          {activeTab === 'evaluation' && (
-            <PatientEvaluationSection patientId={patient.id} />
-          )}
-
-          {/* Tab 3: SOAP 노트 */}
+          {/* Tab 2: SOAP 노트 */}
           {activeTab === 'soap' && (
             <PatientSoapSection
               patientId={patient.id}
@@ -471,7 +791,7 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
             />
           )}
 
-          {/* Tab 4: 운동 기록 */}
+          {/* Tab 3: 운동 기록 */}
           {activeTab === 'activity' && (
             <div className="space-y-6">
               {/* 3개 하위 메뉴 */}
@@ -497,11 +817,217 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
 
               {/* 하위 메뉴 1: 수행 기록 */}
               {activitySubTab === 'logs' && (
-                <div>
+                <div className="space-y-6">
+                  {/* 비동기 로딩 중 선택 대상 대기 안내 */}
+                  {isWaitingForTargetLog && (
+                    <div className="p-5 rounded-xl border border-blue-200 bg-blue-50/50 flex items-center gap-3 text-xs text-blue-900">
+                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+                      <span>선택한 운동 수행 기록을 불러오는 중입니다...</span>
+                    </div>
+                  )}
+
+                  {/* 대상 기록 미조회/삭제 예외 안내 */}
+                  {isTargetLogNotFound && (
+                    <div
+                      role="alert"
+                      className="p-4 rounded-xl border border-amber-200 bg-amber-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950"
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <p className="font-semibold">선택한 운동 수행 기록을 찾을 수 없습니다.</p>
+                          <p className="text-amber-800">
+                            해당 기록이 삭제되었거나 현재 환자의 기록으로 조회되지 않습니다. 아래 수행 기록 목록에서 다른 회차를 선택해 주세요.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleClearSelectedWorkoutLog}
+                        className="px-3 py-1.5 text-xs font-medium text-amber-900 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 cursor-pointer shrink-0 self-end sm:self-center"
+                      >
+                        안내 닫기
+                      </button>
+                    </div>
+                  )}
+
+                  {/* 선택된 단일 운동 수행 기록 상세 + 기존 임상 피드백 작성 UI */}
+                  {selectedLog && (() => {
+                    const selectedTime = selectedLog.loggedAt
+                      ? new Date(selectedLog.loggedAt).toLocaleTimeString('ko-KR', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })
+                      : '';
+                    const selectedPainScore = selectedLog.postPainLevel ?? selectedLog.painLevel;
+                    const selectedStatusText =
+                      selectedLog.status === 'skipped'
+                        ? '미수행'
+                        : selectedLog.status === 'partial'
+                          ? '부분 수행'
+                          : '정상 완료';
+                    const selectedStatusBadge =
+                      selectedLog.status === 'skipped'
+                        ? 'bg-gray-100 text-gray-700'
+                        : selectedLog.status === 'partial'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-emerald-100 text-emerald-800';
+                    const matchingVideos = submittedVideos.filter(
+                      (v) => v.exerciseId === selectedLog.exerciseId
+                    );
+                    const primaryVideo =
+                      matchingVideos.find((v) => v.submittedAt?.startsWith(selectedLog.date)) ||
+                      matchingVideos[0];
+
+                    return (
+                      <div
+                        ref={selectedLogDetailRef}
+                        className="rounded-2xl border-2 border-blue-200 bg-white p-5 sm:p-6 space-y-6 shadow-xs"
+                      >
+                        {/* 상세 헤더 */}
+                        <div className="flex items-start justify-between gap-4 pb-4 border-b border-gray-100">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[11px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
+                                선택된 운동 기록
+                              </span>
+                              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${selectedStatusBadge}`}>
+                                {selectedStatusText}
+                              </span>
+                              <span className="font-mono text-xs text-gray-500 tabular-nums">
+                                {selectedLog.date} {selectedTime}
+                              </span>
+                            </div>
+                            <h3 className="text-lg font-bold text-gray-900">
+                              {selectedLog.exerciseName}
+                            </h3>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleClearSelectedWorkoutLog}
+                            className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors cursor-pointer shrink-0"
+                            title="선택된 기록 상세 닫기"
+                            aria-label="선택된 기록 상세 닫기"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* 운동 수행 결과 요약 */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                            <span className="text-[11px] text-gray-500 block">처방 목표</span>
+                            <span className="font-mono font-bold text-gray-900 text-sm mt-0.5 block tabular-nums">
+                              {selectedLog.prescribedSets}세트 × {selectedLog.prescribedReps}회
+                            </span>
+                          </div>
+                          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                            <span className="text-[11px] text-gray-500 block">실제 수행</span>
+                            <span className="font-mono font-bold text-blue-700 text-sm mt-0.5 block tabular-nums">
+                              {selectedLog.actualSets}세트 × {selectedLog.actualReps}회
+                            </span>
+                          </div>
+                          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                            <span className="text-[11px] text-gray-500 block">통증 척도 (NRS)</span>
+                            <span
+                              className={`font-mono font-bold text-sm mt-0.5 block tabular-nums ${
+                                selectedPainScore >= 5 ? 'text-rose-600' : 'text-gray-900'
+                              }`}
+                            >
+                              {selectedLog.prePainLevel !== undefined &&
+                              selectedLog.postPainLevel !== undefined
+                                ? `전 ${selectedLog.prePainLevel} → 후 ${selectedLog.postPainLevel}/10`
+                                : `${selectedPainScore}/10`}
+                            </span>
+                          </div>
+                          <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                            <span className="text-[11px] text-gray-500 block">체감 난이도</span>
+                            <span className="font-semibold text-gray-900 text-sm mt-0.5 block">
+                              {selectedLog.difficulty || '미입력'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* 환자 질문 및 메모 */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-800">
+                            <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                            <span>환자 메모 및 질문</span>
+                          </div>
+                          {selectedLog.patientNotes?.trim() ? (
+                            <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-sm text-gray-900 leading-relaxed whitespace-pre-wrap">
+                              {selectedLog.patientNotes}
+                            </div>
+                          ) : (
+                            <p className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-xs text-gray-500">
+                              이 운동 회차에 작성된 환자 메모나 질문이 없습니다.
+                            </p>
+                          )}
+                        </div>
+
+                        {/* 연관 제출 영상 (존재 시 표시 및 영상 리뷰 탭 연결) */}
+                        {primaryVideo && (
+                          <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-3">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2 text-xs font-semibold text-gray-900">
+                                <Video className="w-4 h-4 text-blue-600 shrink-0" />
+                                <span>
+                                  제출된 운동 영상 ({matchingVideos.length}건) · {primaryVideo.fileName}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedVideoSubmissionId(primaryVideo.id);
+                                  setActivitySubTab('videos');
+                                }}
+                                className="text-xs font-semibold text-blue-600 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <span>제출 영상 탭에서 보기</span>
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {primaryVideo.videoUrl && (
+                              <div className="rounded-xl overflow-hidden bg-black aspect-video max-h-64">
+                                <video
+                                  src={primaryVideo.videoUrl}
+                                  controls
+                                  playsInline
+                                  className="w-full h-full object-contain"
+                                />
+                              </div>
+                            )}
+
+                            {primaryVideo.patientNotes?.trim() && (
+                              <p className="text-xs text-gray-600">
+                                영상 메모: "{primaryVideo.patientNotes}"
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* 기존 임상 피드백 작성 UI 및 이력 재사용 */}
+                        <div className="pt-5 border-t border-gray-200 space-y-6">
+                          {renderClinicalFeedbackForm(
+                            'selected-log',
+                            '이 운동 기록에 대한 임상 피드백 작성',
+                            selectedLog
+                          )}
+                          {renderFeedbackHistory(selectedLog)}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* 전체 수행 기록 목록 */}
                   {logs.length === 0 ? (
                     <div className="py-16 border-t border-b border-gray-200 text-center">
                       <p className="text-sm text-gray-500">
-                        아직 기록된 운동 수행 데이터가 없습니다. 환자가 운동을 완료하면 여기에 표시됩니다.
+                        {isLoadingRemoteLogs
+                          ? '운동 수행 기록을 불러오는 중입니다...'
+                          : '아직 기록된 운동 수행 데이터가 없습니다. 환자가 운동을 완료하면 여기에 표시됩니다.'}
                       </p>
                     </div>
                   ) : (
@@ -526,11 +1052,17 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
                             : log.status === 'partial'
                               ? 'text-amber-700'
                               : 'text-emerald-700';
+                        const isSelected = selectedWorkoutLogId === log.id;
 
                         return (
                           <div
                             key={log.id}
-                            className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm"
+                            onClick={() => handleSelectWorkoutLog(log)}
+                            className={`py-4 px-3 -mx-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'bg-blue-50/70 ring-1 ring-blue-300'
+                                : 'hover:bg-gray-50'
+                            }`}
                           >
                             <div className="space-y-1">
                               <div className="flex items-baseline gap-2.5 flex-wrap">
@@ -543,6 +1075,11 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
                                 <span className={`text-xs font-medium ${statusColor}`}>
                                   {statusText}
                                 </span>
+                                {isSelected && (
+                                  <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                                    선택됨
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-4 text-xs text-gray-600 font-mono tabular-nums flex-wrap">
@@ -574,15 +1111,13 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
                               {!isDisconnected && (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setActivitySubTab('feedback');
-                                    setNewFeedbackContent(
-                                      `[${log.date} ${log.exerciseName}] 통증 NRS ${painScore}/10 확인했습니다. `
-                                    );
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectWorkoutLog(log);
                                   }}
                                   className="text-xs font-medium text-blue-600 hover:underline cursor-pointer"
                                 >
-                                  피드백 작성
+                                  {isSelected ? '상세 열림' : '상세 · 피드백'}
                                 </button>
                               )}
                             </div>
@@ -601,116 +1136,15 @@ export const TherapistPatientDetailView: React.FC<TherapistPatientDetailViewProp
                   patientName={patient.name}
                   therapistName={currentUser?.name}
                   onFeedbackSaved={onFeedbackSaved}
+                  initialSubmissionId={selectedVideoSubmissionId}
                 />
               )}
 
               {/* 하위 메뉴 3: 피드백 */}
               {activitySubTab === 'feedback' && (
                 <div className="space-y-10">
-                  {/* 새 피드백 작성 폼 */}
-                  <section className="space-y-4">
-                    <h2 className="text-base font-semibold text-gray-900">
-                      임상 피드백 작성
-                    </h2>
-
-                    {feedbackSuccessMsg && (
-                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 font-medium">
-                        {feedbackSuccessMsg}
-                      </div>
-                    )}
-
-                    {feedbackErrorMsg && (
-                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-900 font-medium">
-                        {feedbackErrorMsg}
-                      </div>
-                    )}
-
-                    <form onSubmit={handleSaveFeedback} className="space-y-4">
-                      <div>
-                        <label
-                          htmlFor="chart-feedback-content"
-                          className="text-xs font-medium text-gray-700 block mb-1.5"
-                        >
-                          운동 소견 및 지도 코멘트 <span className="text-rose-500">*</span>
-                        </label>
-                        <textarea
-                          id="chart-feedback-content"
-                          value={newFeedbackContent}
-                          onChange={(e) => setNewFeedbackContent(e.target.value)}
-                          disabled={isDisconnected || isSavingFeedback}
-                          placeholder="예: 수행 기록상 브리지 시 통증(NRS 1)이 양호합니다. 허리 과신전에 계속 주의하며 호흡을 유지하세요."
-                          rows={3}
-                          className="w-full text-sm p-3 rounded-lg border border-gray-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 disabled:bg-gray-50 disabled:text-gray-400"
-                          required
-                        />
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="chart-feedback-recommendation"
-                          className="text-xs font-medium text-gray-700 block mb-1.5"
-                        >
-                          권장 처방 및 일상 수칙 (선택)
-                        </label>
-                        <input
-                          id="chart-feedback-recommendation"
-                          type="text"
-                          value={newRecommendation}
-                          onChange={(e) => setNewRecommendation(e.target.value)}
-                          disabled={isDisconnected || isSavingFeedback}
-                          placeholder="예: 내일도 동일 세트 수로 진행하시고 1시간 좌식 후 기립 스트레칭을 병행하세요."
-                          className="w-full text-sm p-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-600 disabled:bg-gray-50 disabled:text-gray-400"
-                        />
-                      </div>
-
-                      <div className="flex justify-end">
-                        <button
-                          type="submit"
-                          disabled={isSavingFeedback || isDisconnected}
-                          className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg inline-flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>
-                            {isSavingFeedback ? '피드백 전송 중...' : '피드백 전송 및 차트 저장'}
-                          </span>
-                        </button>
-                      </div>
-                    </form>
-                  </section>
-
-                  {/* 전송된 피드백 이력 */}
-                  <section className="pt-8 border-t border-gray-200 space-y-4">
-                    <h2 className="text-base font-semibold text-gray-900">
-                      피드백 이력 ({patient.feedbacks?.length || 0}건)
-                    </h2>
-
-                    {!patient.feedbacks || patient.feedbacks.length === 0 ? (
-                      <p className="py-10 text-center text-sm text-gray-500 border-t border-b border-gray-100">
-                        아직 등록된 피드백이 없습니다.
-                      </p>
-                    ) : (
-                      <div className="divide-y divide-gray-100 border-t border-b border-gray-200">
-                        {patient.feedbacks.map((fb) => (
-                          <div key={fb.id} className="py-4 space-y-1.5 text-sm">
-                            <div className="flex items-center justify-between gap-4">
-                              <span className="font-semibold text-gray-900">
-                                {getFeedbackAuthorDisplayName(fb, patient)}
-                              </span>
-                              <span className="text-xs text-gray-400 font-mono tabular-nums">
-                                {fb.date}
-                              </span>
-                            </div>
-                            <p className="text-gray-700 leading-relaxed">{fb.content}</p>
-                            {fb.recommendation && (
-                              <p className="text-xs text-blue-700 pt-0.5">
-                                권장 사항: {fb.recommendation}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
+                  {renderClinicalFeedbackForm('chart', '임상 피드백 작성', null)}
+                  {renderFeedbackHistory()}
                 </div>
               )}
             </div>

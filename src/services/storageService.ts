@@ -16,7 +16,8 @@ import {
   UserAccount,
   PatientTherapistConnection,
   PatientVideoSubmission,
-  ClinicalFeedback
+  ClinicalFeedback,
+  FeedbackReadState
 } from '../types/rehab';
 import {
   EXERCISE_LIBRARY,
@@ -27,7 +28,7 @@ import {
 import { FirebaseService } from './firebaseService';
 import { waitForFirebaseAuthUid } from './firebase';
 import { isLegacyDemoIdentifier } from './authService';
-import { isFirebaseConfigured } from '../config/firebaseConfig';
+import { isFirebaseConfigured, getFirebaseEnvironmentMode } from '../config/firebaseConfig';
 
 const PATIENTS_KEY = 'rehab_patients_v1';
 const WORKOUT_LOGS_KEY = 'rehab_workout_logs_v1';
@@ -1230,43 +1231,115 @@ export const StorageService = {
 
   async addClinicalFeedback(
     patientId: string,
-    feedback: { content: string; recommendation?: string },
+    feedback: { content: string; recommendation?: string; workoutLogId?: string },
     therapistName: string = '담당 물리치료사',
     therapistId?: string
   ): Promise<boolean> {
+    const trimmedContent = typeof feedback?.content === 'string' ? feedback.content.trim() : '';
+    if (!trimmedContent) {
+      throw new Error('피드백 내용을 입력해 주세요.');
+    }
+
     const patients = this.getPatients();
     const index = patients.findIndex((p) => p.id === patientId);
-    if (index === -1) return false;
+    const useFirebasePersistence =
+      isFirebaseConfigured() || getFirebaseEnvironmentMode() === 'test';
 
-    const patient = patients[index];
-    const actualTherapistId = therapistId || patient.therapistId || '';
+    if (!useFirebasePersistence && index === -1) {
+      throw new Error('대상 환자 정보를 찾을 수 없습니다.');
+    }
+
+    const patient = index !== -1 ? patients[index] : undefined;
+    const now = new Date();
+    const normalizedWorkoutLogId =
+      typeof feedback.workoutLogId === 'string' && feedback.workoutLogId.trim()
+        ? feedback.workoutLogId.trim()
+        : undefined;
+    const trimmedRecommendation = feedback.recommendation?.trim();
+
     const newFeedback: ClinicalFeedback = {
-      id: `fb-${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      therapistId: actualTherapistId || undefined,
+      id: `fb-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      date: now.toISOString().split('T')[0],
+      createdAt: now.toISOString(),
+      notificationEligible: true,
+      therapistId: therapistId || patient?.therapistId || undefined,
       therapistName,
-      content: feedback.content.trim(),
-      recommendation: feedback.recommendation?.trim()
+      content: trimmedContent,
+      ...(trimmedRecommendation ? { recommendation: trimmedRecommendation } : {}),
+      ...(normalizedWorkoutLogId ? { workoutLogId: normalizedWorkoutLogId } : {})
     };
 
-    const existingFeedbacks = patient.feedbacks || [];
+    if (useFirebasePersistence) {
+      // 1. Firebase 인증 완료 확인 후 Firestore 트랜잭션 선행 커밋 (실패 시 localStorage 미변경 & 예외 전파)
+      const authUid = await waitForFirebaseAuthUid();
+      if (!authUid) {
+        const authErr: any = new Error(
+          'Firebase 인증이 완료되지 않아 피드백을 저장할 수 없습니다. 다시 로그인한 후 시도해 주세요.'
+        );
+        authErr.code = 'unauthenticated';
+        throw authErr;
+      }
+
+      const verifiedFeedback: ClinicalFeedback = {
+        ...newFeedback,
+        therapistId: authUid
+      };
+
+      const saved = await FirebaseService.saveFeedback(patientId, verifiedFeedback, authUid);
+      if (!saved) {
+        throw new Error('임상 피드백을 서버에 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      }
+
+      // 2. 서버 트랜잭션 커밋 성공 이후에만 최신 로컬 캐시에 반영
+      const latestPatients = this.getPatients();
+      const latestIndex = latestPatients.findIndex((p) => p.id === patientId);
+      if (latestIndex !== -1) {
+        const latestPatient = latestPatients[latestIndex];
+        const existingFeedbacks = Array.isArray(latestPatient.feedbacks)
+          ? latestPatient.feedbacks
+          : [];
+        const dedupedExisting = existingFeedbacks.filter(
+          (item) => item?.id !== verifiedFeedback.id
+        );
+        latestPatients[latestIndex] = {
+          ...latestPatient,
+          feedbacks: [verifiedFeedback, ...dedupedExisting]
+        };
+        localStorage.setItem(PATIENTS_KEY, JSON.stringify(latestPatients));
+        emitChange();
+      }
+
+      return true;
+    }
+
+    // 비-Firebase 로컬 폴백 모드
+    const existingFeedbacks = Array.isArray(patient?.feedbacks) ? patient!.feedbacks! : [];
+    const dedupedExisting = existingFeedbacks.filter((item) => item?.id !== newFeedback.id);
     patients[index] = {
-      ...patient,
-      feedbacks: [newFeedback, ...existingFeedbacks]
+      ...patients[index],
+      feedbacks: [newFeedback, ...dedupedExisting]
     };
 
     localStorage.setItem(PATIENTS_KEY, JSON.stringify(patients));
     emitChange();
-
-    if (isFirebaseConfigured() && actualTherapistId) {
-      try {
-        await FirebaseService.saveFeedback(patientId, newFeedback, actualTherapistId);
-      } catch (err) {
-        console.warn('Firestore feedback sync deferred:', err);
-      }
-    }
-
     return true;
+  },
+
+  /**
+   * 환자별 피드백 읽음 상태 목록 조회 (Firestore 영구 저장소 직접 위임, 로컬 임시 성공 위장 없음)
+   */
+  async getFeedbackReadStates(patientId: string): Promise<FeedbackReadState[]> {
+    return FirebaseService.getFeedbackReadStates(patientId);
+  },
+
+  /**
+   * 특정 피드백 읽음 상태 저장 (Firestore 영구 저장소 직접 위임, 실패 시 예외 전파)
+   */
+  async markFeedbackAsRead(
+    patientId: string,
+    feedbackId: string
+  ): Promise<{ readState: FeedbackReadState; alreadyRead: boolean }> {
+    return FirebaseService.markFeedbackAsRead(patientId, feedbackId);
   },
 
   updatePatientInfo(patientId: string, updates: Partial<Patient>): boolean {

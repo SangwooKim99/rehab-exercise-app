@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Patient, UserAccount, formatPatientDiagnosis } from '../../types/rehab';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Patient, UserAccount, ClinicalFeedback, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import { AuthService, getFeedbackAuthorDisplayName } from '../../services/authService';
 import { 
@@ -22,7 +22,9 @@ import {
   AlertTriangle,
   XCircle,
   HelpCircle,
-  FileEdit
+  FileEdit,
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 import { DisconnectConfirmModal } from '../common/DisconnectConfirmModal';
 import { EditDiagnosisModal } from '../common/EditDiagnosisModal';
@@ -32,17 +34,107 @@ interface PatientProfileProps {
   onOpenLogoutModal: () => void;
   onConnectionUpdated: () => void;
   onOpenGuide?: () => void;
+  remoteFeedbacks?: ClinicalFeedback[];
+  targetFeedbackId?: string | null;
+  feedbackTargetRequestKey?: number;
+  onFeedbackDisplayed?: (feedback: ClinicalFeedback) => void;
+  markingFeedbackIds?: Record<string, boolean>;
+  feedbackReadSaveErrors?: Record<string, { code: string; message: string }>;
+  onRetryMarkRead?: (feedback: ClinicalFeedback) => void;
 }
 
 export const PatientProfile: React.FC<PatientProfileProps> = ({
   patient,
   onOpenLogoutModal,
   onConnectionUpdated,
-  onOpenGuide
+  onOpenGuide,
+  remoteFeedbacks,
+  targetFeedbackId = null,
+  feedbackTargetRequestKey,
+  onFeedbackDisplayed,
+  markingFeedbackIds,
+  feedbackReadSaveErrors,
+  onRetryMarkRead
 }) => {
   const [connectionCode, setConnectionCode] = useState<string>('');
   const [connectMessage, setConnectMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const feedbackSectionRef = useRef<HTMLDivElement | null>(null);
+  const feedbackCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const scrolledRequestKeyRef = useRef<number | null>(null);
+  const displayedFeedbackKeyRef = useRef<string | null>(null);
+
+  // 원격 feedbacks 컬렉션과 patient.feedbacks를 ID 기준으로 안전하게 병합 (최신순)
+  const mergedFeedbacks = useMemo<ClinicalFeedback[]>(() => {
+    const mergedMap = new Map<string, ClinicalFeedback>();
+    for (const fb of remoteFeedbacks || []) {
+      if (fb && fb.id) {
+        mergedMap.set(fb.id, fb);
+      }
+    }
+    for (const fb of patient.feedbacks || []) {
+      if (fb && fb.id && !mergedMap.has(fb.id)) {
+        mergedMap.set(fb.id, fb);
+      }
+    }
+    return Array.from(mergedMap.values()).sort(
+      (a, b) =>
+        new Date(b.createdAt || b.date || 0).getTime() -
+        new Date(a.createdAt || a.date || 0).getTime()
+    );
+  }, [remoteFeedbacks, patient.feedbacks]);
+
+  // 선택한 피드백 카드로 자동 스크롤 (요청 키당 1회)
+  useEffect(() => {
+    if (!targetFeedbackId || !feedbackTargetRequestKey) return;
+    if (scrolledRequestKeyRef.current === feedbackTargetRequestKey) return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      const targetCardEl = feedbackCardRefs.current[targetFeedbackId];
+      if (targetCardEl) {
+        targetCardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        scrolledRequestKeyRef.current = feedbackTargetRequestKey;
+      } else if (feedbackSectionRef.current) {
+        feedbackSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        scrolledRequestKeyRef.current = feedbackTargetRequestKey;
+      }
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [targetFeedbackId, feedbackTargetRequestKey, mergedFeedbacks]);
+
+  // 실제 피드백 본문과 DOM 카드가 화면에 렌더링된 것이 확인된 후에만 onFeedbackDisplayed 1회 호출
+  useEffect(() => {
+    if (!onFeedbackDisplayed || !targetFeedbackId || !feedbackTargetRequestKey) {
+      return;
+    }
+
+    const displayGuardKey = `${patient.id}:${feedbackTargetRequestKey}:${targetFeedbackId}`;
+    if (displayedFeedbackKeyRef.current === displayGuardKey) return;
+
+    const targetFeedback = mergedFeedbacks.find((fb) => fb.id === targetFeedbackId);
+    if (!targetFeedback || !targetFeedback.content || !targetFeedback.content.trim()) return;
+
+    const ownerId = (targetFeedback as ClinicalFeedback & { patientId?: string }).patientId;
+    if (ownerId && ownerId !== patient.id) return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      if (displayedFeedbackKeyRef.current === displayGuardKey) return;
+      const targetCardEl = feedbackCardRefs.current[targetFeedbackId];
+      if (!targetCardEl || !targetCardEl.isConnected) return;
+
+      displayedFeedbackKeyRef.current = displayGuardKey;
+      onFeedbackDisplayed(targetFeedback);
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [
+    onFeedbackDisplayed,
+    patient.id,
+    targetFeedbackId,
+    feedbackTargetRequestKey,
+    mergedFeedbacks
+  ]);
   const [showInquiryModal, setShowInquiryModal] = useState<boolean>(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState<boolean>(false);
   const [isDisconnecting, setIsDisconnecting] = useState<boolean>(false);
@@ -337,37 +429,104 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
       </div>
 
       {/* Clinical Feedbacks from Therapist */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4">
+      <div
+        ref={feedbackSectionRef}
+        className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4"
+      >
         <div className="flex items-center justify-between pb-3 border-b border-gray-100">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-blue-600" />
             <h2 className="text-sm font-bold text-gray-900">물리치료사 소견 및 피드백</h2>
           </div>
           <span className="text-xs text-gray-400 font-mono tabular-nums">
-            {(patient.feedbacks || []).length}건
+            {mergedFeedbacks.length}건
           </span>
         </div>
 
-        {(!patient.feedbacks || patient.feedbacks.length === 0) ? (
+        {targetFeedbackId && !mergedFeedbacks.some((fb) => fb.id === targetFeedbackId) && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+            선택한 피드백 항목을 찾을 수 없습니다. 아래 전체 피드백 목록을 확인해 주세요.
+          </p>
+        )}
+
+        {mergedFeedbacks.length === 0 ? (
           <p className="text-xs text-gray-400 py-6 text-center">
             아직 등록된 치료사 피드백이 없습니다. 운동을 수행하시면 담당 치료사가 차트를 검토 후 소견을 전달합니다.
           </p>
         ) : (
           <div className="space-y-3">
-            {patient.feedbacks.map((fb) => (
-              <div key={fb.id} className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 text-xs space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-gray-900">{getFeedbackAuthorDisplayName(fb, patient)}</span>
-                  <span className="text-[11px] text-gray-400 font-mono tabular-nums">{fb.date}</span>
+            {mergedFeedbacks.map((fb) => {
+              const isHighlighted = Boolean(targetFeedbackId && fb.id === targetFeedbackId);
+              const writtenDate = fb.date || (fb.createdAt ? fb.createdAt.slice(0, 10) : '');
+              const isMarkingRead = Boolean(markingFeedbackIds?.[fb.id]);
+              const readSaveError = feedbackReadSaveErrors?.[fb.id] || null;
+
+              return (
+                <div
+                  key={fb.id}
+                  ref={(el) => {
+                    feedbackCardRefs.current[fb.id] = el;
+                  }}
+                  className={`p-3.5 rounded-xl border text-xs space-y-1.5 transition-colors ${
+                    isHighlighted
+                      ? 'bg-blue-50/60 border-blue-400 ring-2 ring-blue-100'
+                      : 'bg-gray-50 border-gray-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-gray-900">{getFeedbackAuthorDisplayName(fb, patient)}</span>
+                      {isHighlighted && (
+                        <>
+                          <span className="text-gray-400" aria-hidden="true">·</span>
+                          <span className="font-semibold text-blue-700">선택한 피드백</span>
+                        </>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-gray-400 font-mono tabular-nums">{writtenDate}</span>
+                  </div>
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-wrap break-words">{fb.content}</p>
+                  {fb.recommendation && fb.recommendation.trim() && (
+                    <p className="text-[11px] text-blue-700 bg-blue-50/80 p-2 rounded border border-blue-100">
+                      <strong>권장 사항:</strong> {fb.recommendation.trim()}
+                    </p>
+                  )}
+
+                  {isMarkingRead && !readSaveError && (
+                    <p className="text-[11px] text-blue-600 pt-1">
+                      읽음 상태를 저장하는 중입니다...
+                    </p>
+                  )}
+
+                  {readSaveError && (
+                    <div className="mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-rose-50/80 rounded-lg px-3 py-2.5 border border-rose-200">
+                      <div className="flex items-start gap-2 text-rose-800 min-w-0">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5 min-w-0">
+                          <p className="text-xs font-semibold text-rose-900">
+                            읽음 상태 저장 실패
+                          </p>
+                          <p className="text-[11px] text-rose-700 leading-relaxed break-words">
+                            {readSaveError.message}
+                          </p>
+                        </div>
+                      </div>
+                      {onRetryMarkRead && (
+                        <button
+                          type="button"
+                          disabled={isMarkingRead}
+                          onClick={() => onRetryMarkRead(fb)}
+                          className="min-h-[40px] px-3.5 py-2 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-wait"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isMarkingRead ? 'animate-spin' : ''}`} />
+                          <span>{isMarkingRead ? '저장 중...' : '다시 시도'}</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <p className="text-gray-700 leading-relaxed">{fb.content}</p>
-                {fb.recommendation && (
-                  <p className="text-[11px] text-blue-700 bg-blue-50/80 p-2 rounded border border-blue-100">
-                    <strong>권장 사항:</strong> {fb.recommendation}
-                  </p>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

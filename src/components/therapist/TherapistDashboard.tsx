@@ -35,7 +35,14 @@ import {
 interface TherapistDashboardProps {
   onSelectPatientForProgram: (patientId: string) => void;
   onNavigateTab: (tab: string, patientId?: string) => void;
-  onOpenPatientDetail?: (patientId: string) => void;
+  onOpenPatientDetail?: (
+    patientId: string,
+    options?: {
+      initialTab?: 'info' | 'soap' | 'activity';
+      initialActivitySubTab?: 'logs' | 'videos' | 'feedback';
+      targetWorkoutLogId?: string | null;
+    }
+  ) => void;
   currentUser?: AuthUser;
 }
 
@@ -515,26 +522,33 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
                     const timeStr = log.loggedAt
                       ? new Date(log.loggedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
                       : '';
+                    const handleOpenRecentLog = () => {
+                      if (!onOpenPatientDetail) return;
+                      onOpenPatientDetail(log.patientId, {
+                        initialTab: 'activity',
+                        initialActivitySubTab: 'logs',
+                        targetWorkoutLogId: log.id
+                      });
+                    };
 
                     return (
-                      <div
+                      <button
                         key={log.id}
-                        className="p-3.5 rounded-2xl bg-gray-50 border border-gray-100 text-xs space-y-1 hover:border-gray-200 transition-colors"
+                        type="button"
+                        onClick={handleOpenRecentLog}
+                        className="group w-full text-left p-3.5 rounded-2xl bg-gray-50 border border-gray-100 text-xs space-y-1 hover:border-blue-300 hover:bg-blue-50/40 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label={`${patient?.name || '환자'}의 ${log.date} ${log.exerciseName} 수행 기록 및 피드백 보기`}
                       >
-                        <div className="flex items-center justify-between">
-                          <button
-                            type="button"
-                            onClick={() => onOpenPatientDetail && onOpenPatientDetail(log.patientId)}
-                            className="font-extrabold text-gray-900 hover:text-blue-600 hover:underline cursor-pointer"
-                          >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-extrabold text-gray-900 group-hover:text-blue-700 group-hover:underline">
                             {patient?.name || '환자'}
-                          </button>
+                          </span>
                           <span className="text-[11px] text-gray-400 font-mono tabular-nums">
                             {log.date} {timeStr}
                           </span>
                         </div>
 
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-blue-700 font-bold">{log.exerciseName}</span>
                           <span className="font-mono tabular-nums text-gray-700 font-bold">
                             {log.actualSets}세트 × {log.actualReps}회
@@ -546,14 +560,10 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
                             <HeartPulse className="w-3.5 h-3.5" />
                             통증 NRS: {log.postPainLevel ?? log.painLevel}/10
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => onOpenPatientDetail && onOpenPatientDetail(log.patientId)}
-                            className="text-[11px] font-bold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
-                          >
+                          <span className="text-[11px] font-bold text-blue-600 group-hover:underline flex items-center gap-1">
                             <MessageSquare className="w-3 h-3" />
-                            <span>피드백 작성</span>
-                          </button>
+                            <span>기록 확인 · 피드백 작성</span>
+                          </span>
                         </div>
 
                         {log.patientNotes && (
@@ -561,7 +571,7 @@ export const TherapistDashboard: React.FC<TherapistDashboardProps> = ({
                             "{log.patientNotes}"
                           </p>
                         )}
-                      </div>
+                      </button>
                     );
                   })
                 )}
