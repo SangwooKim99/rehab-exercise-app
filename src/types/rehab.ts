@@ -101,7 +101,26 @@ export interface ClinicalFeedback {
   therapistName: string;
   content: string;
   recommendation?: string;
+  /** 연결된 단일 운동 수행 기록 고유 ID (일반 피드백 및 기존 레거시 피드백은 미포함) */
+  workoutLogId?: string;
+  /** 피드백 생성 시각 (ISO 8601) */
+  createdAt?: string;
+  /** 신규 알림 대상 여부 (신규 작성 피드백만 true, 기존 과거 피드백은 미포함으로 알림 제외) */
+  notificationEligible?: boolean;
 }
+
+export interface FeedbackReadState {
+  feedbackId: string;
+  readAt: Timestamp | null;
+}
+
+export type FeedbackReadErrorCode =
+  | 'permission-denied'
+  | 'network'
+  | 'unauthenticated'
+  | 'invalid-argument'
+  | 'not-found'
+  | 'unknown';
 
 export interface SoapNote {
   id: string;

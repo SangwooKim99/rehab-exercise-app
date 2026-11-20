@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { Patient, Exercise, AssignedExercise, formatPatientDiagnosis } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
 import {
+  AlertTriangle,
   Plus,
   Trash2,
   Save,
@@ -22,6 +23,13 @@ interface TherapistProgramEditorProps {
   selectedPatientId: string;
   onSelectPatient: (patientId: string) => void;
   onSaveSuccess: (patientName: string) => void;
+}
+
+interface PendingRemovalTarget {
+  assignmentId: string | undefined;
+  index: number;
+  exerciseId: string;
+  exerciseName: string;
 }
 
 export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
@@ -46,6 +54,9 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     } else {
       setWorkingProgram([]);
     }
+    setPendingRemoval(null);
+    setProgramError('');
+    setAddModalError('');
   }, [selectedPatientId, currentPatient?.id]);
 
   // When patient selection changes via dropdown, reset working copy
@@ -55,6 +66,8 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     if (p) {
       setWorkingProgram([...p.assignedProgram]);
     }
+    setPendingRemoval(null);
+    setProgramError('');
   };
 
   // Add Exercise Modal state
@@ -62,6 +75,11 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
   const [modalCategory, setModalCategory] = useState<string>('all');
   const [modalSearch, setModalSearch] = useState<string>('');
   const [selectedLibraryExercise, setSelectedLibraryExercise] = useState<Exercise | null>(null);
+
+  // Delete confirmation modal & inline validation states
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemovalTarget | null>(null);
+  const [addModalError, setAddModalError] = useState<string>('');
+  const [programError, setProgramError] = useState<string>('');
 
   // New exercise prescription form fields
   const [newReps, setNewReps] = useState<number>(10);
@@ -75,6 +93,7 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     setNewSets(ex.defaultSets);
     setNewFrequency(ex.defaultFrequency);
     setNewNotes('');
+    setAddModalError('');
   };
 
   const handleAddExerciseToWorkingProgram = (e: React.FormEvent) => {
@@ -82,7 +101,7 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     if (!selectedLibraryExercise) return;
 
     if (newSets <= 0 || newReps <= 0) {
-      alert('세트 수와 반복 횟수는 1 이상이어야 합니다.');
+      setAddModalError('세트 수와 반복 횟수는 1 이상이어야 합니다.');
       return;
     }
 
@@ -96,15 +115,67 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
       assignedDate: StorageService.getTodayDateString()
     };
 
-    setWorkingProgram([...workingProgram, newAssignment]);
+    setWorkingProgram((prev) => [...prev, newAssignment]);
+    setAddModalError('');
+    setProgramError('');
     setIsAddModalOpen(false);
     setSelectedLibraryExercise(null);
   };
 
-  const handleRemoveExercise = (assignmentId: string) => {
-    if (confirm('해당 운동을 대상자의 처방 프로그램에서 삭제하시겠습니까?')) {
-      setWorkingProgram(workingProgram.filter((item) => item.assignmentId !== assignmentId));
-    }
+  const handleRequestRemoveExercise = (
+    assignment: AssignedExercise,
+    index: number,
+    exerciseName: string
+  ) => {
+    setPendingRemoval({
+      assignmentId: assignment.assignmentId,
+      index,
+      exerciseId: assignment.exerciseId,
+      exerciseName
+    });
+  };
+
+  const handleConfirmRemoveExercise = () => {
+    if (!pendingRemoval) return;
+    const target = pendingRemoval;
+
+    setWorkingProgram((prev) => {
+      const trimmedId = typeof target.assignmentId === 'string' ? target.assignmentId.trim() : '';
+
+      if (trimmedId) {
+        const matchingCount = prev.filter((item) => item.assignmentId === target.assignmentId).length;
+        if (matchingCount === 1) {
+          return prev.filter((item) => item.assignmentId !== target.assignmentId);
+        }
+        // assignmentId가 중복된 예외 케이스: 선택한 인덱스 위치와 exerciseId까지 일치하는 단일 항목만 제거
+        if (matchingCount > 1) {
+          const itemAtIndex = prev[target.index];
+          if (
+            itemAtIndex &&
+            itemAtIndex.assignmentId === target.assignmentId &&
+            itemAtIndex.exerciseId === target.exerciseId
+          ) {
+            return prev.filter((_, idx) => idx !== target.index);
+          }
+          return prev;
+        }
+        return prev;
+      }
+
+      // assignmentId가 누락된 과거 데이터: 선택한 인덱스 위치의 항목이 미지정 ID + 동일 exerciseId일 때만 단일 제거
+      const itemAtIndex = prev[target.index];
+      if (
+        itemAtIndex &&
+        (!itemAtIndex.assignmentId || !itemAtIndex.assignmentId.trim()) &&
+        itemAtIndex.exerciseId === target.exerciseId
+      ) {
+        return prev.filter((_, idx) => idx !== target.index);
+      }
+      return prev;
+    });
+
+    setProgramError('');
+    setPendingRemoval(null);
   };
 
   const handleUpdateItem = (
@@ -112,8 +183,9 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     field: keyof AssignedExercise,
     value: string | number
   ) => {
-    setWorkingProgram(
-      workingProgram.map((item) => {
+    setProgramError('');
+    setWorkingProgram((prev) =>
+      prev.map((item) => {
         if (item.assignmentId === assignmentId) {
           return { ...item, [field]: value };
         }
@@ -128,11 +200,12 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
     // Validate
     for (const item of workingProgram) {
       if (item.sets <= 0 || item.reps <= 0) {
-        alert('모든 운동의 세트 수와 반복 횟수는 1 이상이어야 합니다.');
+        setProgramError('모든 운동의 세트 수와 반복 횟수는 1 이상이어야 합니다.');
         return;
       }
     }
 
+    setProgramError('');
     const success = StorageService.updatePatientProgram(currentPatient.id, workingProgram);
     if (success) {
       onSaveSuccess(currentPatient.name);
@@ -236,8 +309,10 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
           </div>
 
           <button
+            type="button"
             onClick={() => {
               setSelectedLibraryExercise(null);
+              setAddModalError('');
               setIsAddModalOpen(true);
             }}
             className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center gap-1.5 transition-colors shadow-xs"
@@ -265,7 +340,7 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
 
               return (
                 <div
-                  key={assignment.assignmentId}
+                  key={assignment.assignmentId ? `${assignment.assignmentId}-${index}` : `legacy-${assignment.exerciseId}-${index}`}
                   className="p-4 sm:p-5 rounded-xl border border-gray-200 bg-gray-50/40 hover:border-blue-200 transition-colors space-y-3"
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -280,10 +355,11 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
                     </div>
 
                     <button
-                      onClick={() => handleRemoveExercise(assignment.assignmentId)}
-                      className="text-gray-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors"
+                      type="button"
+                      onClick={() => handleRequestRemoveExercise(assignment, index, exercise.name)}
+                      className="text-gray-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
                       title="이 운동 처방 삭제"
-                      aria-label="삭제"
+                      aria-label={`${exercise.name} 처방 삭제`}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -366,6 +442,17 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
           </div>
         )}
 
+        {/* Inline Program Validation Error */}
+        {programError && (
+          <div
+            role="alert"
+            className="mt-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2"
+          >
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{programError}</span>
+          </div>
+        )}
+
         {/* Bottom Save Button */}
         <div className="mt-8 pt-5 border-t border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <p className="text-xs text-gray-500">
@@ -373,8 +460,9 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
           </p>
 
           <button
+            type="button"
             onClick={handleSaveProgram}
-            className="px-6 py-3 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors self-end sm:self-auto"
+            className="px-6 py-3 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors self-end sm:self-auto cursor-pointer"
           >
             <Save className="w-4 h-4" />
             <span>운동 프로그램 저장하기</span>
@@ -560,6 +648,16 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
                     />
                   </div>
 
+                  {addModalError && (
+                    <div
+                      role="alert"
+                      className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{addModalError}</span>
+                    </div>
+                  )}
+
                   <button
                     type="submit"
                     className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs"
@@ -579,10 +677,69 @@ export const TherapistProgramEditor: React.FC<TherapistProgramEditorProps> = ({
             <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-end shrink-0">
               <button
                 type="button"
-                onClick={() => setIsAddModalOpen(false)}
+                onClick={() => {
+                  setAddModalError('');
+                  setIsAddModalOpen(false);
+                }}
                 className="px-4 py-2 text-xs font-semibold text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-200/60 transition-colors"
               >
                 닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Delete Exercise Confirmation Modal */}
+      {pendingRemoval && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-exercise-modal-title"
+        >
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-2xl max-w-sm w-full overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-rose-700">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <h4 id="remove-exercise-modal-title" className="text-sm font-bold text-gray-900">
+                  운동 처방 삭제 확인
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingRemoval(null)}
+                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 cursor-pointer"
+                aria-label="닫기"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-2 text-xs text-gray-600 leading-relaxed">
+              <p>
+                <strong className="text-gray-900">'{pendingRemoval.exerciseName}'</strong> 운동을{' '}
+                {currentPatient?.name} 님의 처방 편집 목록에서 삭제하시겠습니까?
+              </p>
+              <p className="text-[11px] text-gray-500">
+                ※ 삭제 후 하단의 [운동 프로그램 저장하기]를 눌러야 최종 반영되며, 환자의 기존 운동 수행 기록과 피드백은 그대로 보존됩니다.
+              </p>
+            </div>
+
+            <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/60 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingRemoval(null)}
+                className="px-3.5 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRemoveExercise}
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
+              >
+                삭제
               </button>
             </div>
           </div>

@@ -3,11 +3,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { AuthUser, Patient, Exercise, AssignedExercise } from './types/rehab';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import {
+  AuthUser,
+  Patient,
+  Exercise,
+  AssignedExercise,
+  WorkoutLog,
+  ClinicalFeedback,
+  FeedbackReadState,
+  FeedbackReadErrorCode
+} from './types/rehab';
 import { StorageService, subscribeToRehabStore } from './services/storageService';
 import { AuthService, subscribeToAuth } from './services/authService';
-import { FirebaseService } from './services/firebaseService';
+import {
+  FirebaseService,
+  getUnreadNotificationFeedbacks,
+  buildFeedbackReadStateMap,
+  classifyFeedbackReadError
+} from './services/firebaseService';
 import { getFirebaseAuth, waitForFirebaseAuthUid } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -27,6 +41,7 @@ import { PatientHistory } from './components/patient/PatientHistory';
 import { PatientProfile } from './components/patient/PatientProfile';
 import { PatientBottomNav } from './components/patient/PatientBottomNav';
 import { GuidedWorkoutSession } from './components/patient/GuidedWorkoutSession';
+import { PatientFeedbackNotificationModal } from './components/patient/PatientFeedbackNotificationModal';
 
 // Therapist Components
 import { TherapistSidebar } from './components/therapist/TherapistSidebar';
@@ -99,6 +114,12 @@ export default function App() {
 
   // Dedicated Patient Detail View State (Therapist)
   const [detailedPatientId, setDetailedPatientId] = useState<string | null>(null);
+  const [patientDetailTarget, setPatientDetailTarget] = useState<{
+    initialTab: 'info' | 'soap' | 'activity';
+    initialActivitySubTab?: 'logs' | 'videos' | 'feedback';
+    targetWorkoutLogId: string | null;
+    requestKey: number;
+  } | null>(null);
 
   // Exercise Detail Modal / Fullview State
   const [activeExerciseDetail, setActiveExerciseDetail] = useState<{
@@ -113,6 +134,12 @@ export default function App() {
       tab: string;
       detailedPatientId: string | null;
       selectedPatientId: string;
+      patientDetailTarget?: {
+        initialTab: 'info' | 'soap' | 'activity';
+        initialActivitySubTab?: 'logs' | 'videos' | 'feedback';
+        targetWorkoutLogId: string | null;
+        requestKey: number;
+      } | null;
     }>
   >([]);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
@@ -130,9 +157,99 @@ export default function App() {
     | null
   >(null);
 
+  // Stage 3-B-1: Patient new feedback notification data & state foundation (UI implemented in later steps)
+  const [remotePatientFeedbacks, setRemotePatientFeedbacks] = useState<ClinicalFeedback[]>([]);
+  const [patientFeedbackReadStates, setPatientFeedbackReadStates] = useState<FeedbackReadState[]>([]);
+  const [hasLoadedFeedbackNotifications, setHasLoadedFeedbackNotifications] = useState<boolean>(false);
+  const [isLoadingFeedbackNotifications, setIsLoadingFeedbackNotifications] = useState<boolean>(false);
+  const [feedbackNotificationError, setFeedbackNotificationError] = useState<{
+    code: FeedbackReadErrorCode;
+    message: string;
+  } | null>(null);
+  const [isFeedbackNotificationDismissed, setIsFeedbackNotificationDismissed] = useState<boolean>(false);
+  const [patientFeedbackTarget, setPatientFeedbackTarget] = useState<{
+    patientId: string;
+    feedbackId: string;
+    workoutLogId: string | null;
+    destination: 'history' | 'profile';
+    requestKey: number;
+  } | null>(null);
+  const [remotePatientWorkoutLogs, setRemotePatientWorkoutLogs] = useState<WorkoutLog[]>([]);
+  const [isNavigatingToFeedback, setIsNavigatingToFeedback] = useState<boolean>(false);
+  const [navigatingFeedbackId, setNavigatingFeedbackId] = useState<string | null>(null);
+  const [markingFeedbackIds, setMarkingFeedbackIds] = useState<Record<string, boolean>>({});
+  const [feedbackReadSaveErrors, setFeedbackReadSaveErrors] = useState<
+    Record<string, { code: FeedbackReadErrorCode; message: string }>
+  >({});
+  const feedbackNotificationRequestSeqRef = useRef<number>(0);
+  const feedbackNavigationSeqRef = useRef<number>(0);
+  const feedbackReadActionSeqRef = useRef<number>(0);
+  const isNavigatingToFeedbackRef = useRef<boolean>(false);
+  const markingFeedbackIdsRef = useRef<Set<string>>(new Set());
+
+  const resetPatientFeedbackNotificationState = useCallback(() => {
+    feedbackNotificationRequestSeqRef.current += 1;
+    feedbackNavigationSeqRef.current += 1;
+    feedbackReadActionSeqRef.current += 1;
+    isNavigatingToFeedbackRef.current = false;
+    markingFeedbackIdsRef.current.clear();
+    setRemotePatientFeedbacks([]);
+    setPatientFeedbackReadStates([]);
+    setHasLoadedFeedbackNotifications(false);
+    setIsLoadingFeedbackNotifications(false);
+    setFeedbackNotificationError(null);
+    setIsFeedbackNotificationDismissed(false);
+    setPatientFeedbackTarget(null);
+    setRemotePatientWorkoutLogs([]);
+    setIsNavigatingToFeedback(false);
+    setNavigatingFeedbackId(null);
+    setMarkingFeedbackIds({});
+    setFeedbackReadSaveErrors({});
+  }, []);
+
+  const handleCloseFeedbackNotificationModal = useCallback(() => {
+    feedbackNavigationSeqRef.current += 1;
+    isNavigatingToFeedbackRef.current = false;
+    setIsNavigatingToFeedback(false);
+    setNavigatingFeedbackId(null);
+    setIsFeedbackNotificationDismissed(true);
+  }, []);
+
+  const feedbackReadStateMap = useMemo<Record<string, FeedbackReadState>>(
+    () => buildFeedbackReadStateMap(patientFeedbackReadStates),
+    [patientFeedbackReadStates]
+  );
+
+  const unreadNotificationFeedbacks = useMemo<ClinicalFeedback[]>(() => {
+    if (!hasLoadedFeedbackNotifications || feedbackNotificationError) {
+      return [];
+    }
+    return getUnreadNotificationFeedbacks(remotePatientFeedbacks, patientFeedbackReadStates);
+  }, [
+    hasLoadedFeedbackNotifications,
+    feedbackNotificationError,
+    remotePatientFeedbacks,
+    patientFeedbackReadStates
+  ]);
+
+  const shouldShowFeedbackNotificationModal = Boolean(
+    currentUser &&
+      currentUser.role === 'patient' &&
+      hasLoadedFeedbackNotifications &&
+      feedbackNotificationError === null &&
+      unreadNotificationFeedbacks.length > 0 &&
+      !isFeedbackNotificationDismissed &&
+      !isOnboardingGuideOpen &&
+      !isLogoutModalOpen &&
+      !isGuidedWorkoutOpen &&
+      !activeExerciseDetail &&
+      !pendingAppExitAction
+  );
+
   useEffect(() => {
     if (!detailedPatientId) {
       setHasUnsavedChartChanges(false);
+      setPatientDetailTarget(null);
     }
   }, [detailedPatientId]);
 
@@ -366,6 +483,92 @@ export default function App() {
     };
   }, [currentUser?.id, currentUser?.patientId, currentUser?.role]);
 
+  // Stage 3-B-1: Fetch patient feedbacks & read states after Firebase Auth restoration (patient role only)
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'patient') {
+      resetPatientFeedbackNotificationState();
+      return;
+    }
+
+    let isCancelled = false;
+    const expectedUserId = currentUser.id;
+    const requestSeq = ++feedbackNotificationRequestSeqRef.current;
+
+    // Immediately clear any previous account notification state before querying
+    feedbackNavigationSeqRef.current += 1;
+    feedbackReadActionSeqRef.current += 1;
+    isNavigatingToFeedbackRef.current = false;
+    markingFeedbackIdsRef.current.clear();
+    setRemotePatientFeedbacks([]);
+    setPatientFeedbackReadStates([]);
+    setHasLoadedFeedbackNotifications(false);
+    setFeedbackNotificationError(null);
+    setIsFeedbackNotificationDismissed(false);
+    setPatientFeedbackTarget(null);
+    setRemotePatientWorkoutLogs([]);
+    setIsNavigatingToFeedback(false);
+    setNavigatingFeedbackId(null);
+    setMarkingFeedbackIds({});
+    setFeedbackReadSaveErrors({});
+    setIsLoadingFeedbackNotifications(true);
+
+    const isStale = () =>
+      isCancelled || feedbackNotificationRequestSeqRef.current !== requestSeq;
+
+    (async () => {
+      try {
+        const authUid = await waitForFirebaseAuthUid();
+        if (isStale()) return;
+
+        if (!authUid || authUid !== expectedUserId) {
+          console.warn(
+            'Patient feedback notification fetch skipped: authenticated Firebase UID does not match session user ID.',
+            { authUid, sessionUserId: expectedUserId }
+          );
+          setIsLoadingFeedbackNotifications(false);
+          return;
+        }
+
+        const patientId = authUid;
+        const [feedbacks, readStates] = await Promise.all([
+          FirebaseService.getFeedbacks(patientId),
+          FirebaseService.getFeedbackReadStates(patientId)
+        ]);
+        if (isStale()) return;
+
+        // Re-verify active Firebase Auth UID before committing async results
+        const activeAuthUid = getFirebaseAuth()?.currentUser?.uid || null;
+        if (activeAuthUid !== patientId) {
+          setIsLoadingFeedbackNotifications(false);
+          return;
+        }
+
+        setRemotePatientFeedbacks(feedbacks);
+        setPatientFeedbackReadStates(readStates);
+        setHasLoadedFeedbackNotifications(true);
+        setFeedbackNotificationError(null);
+      } catch (error) {
+        if (isStale()) return;
+        const classified = classifyFeedbackReadError(error);
+        console.warn('Patient feedback notification fetch failed:', classified);
+        // Never treat a failed query as empty read states to prevent false unread notifications
+        setRemotePatientFeedbacks([]);
+        setPatientFeedbackReadStates([]);
+        setHasLoadedFeedbackNotifications(false);
+        setFeedbackNotificationError(classified);
+      } finally {
+        if (!isStale()) {
+          setIsLoadingFeedbackNotifications(false);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+      feedbackNotificationRequestSeqRef.current += 1;
+    };
+  }, [currentUser?.id, currentUser?.role, resetPatientFeedbackNotificationState]);
+
   // Listen to auth changes and storage changes
   const [, setTick] = useState<number>(0);
   useEffect(() => {
@@ -374,6 +577,7 @@ export default function App() {
       setCurrentUser(user);
       setTherapistNavHistory([]);
       setDetailedPatientId(null);
+      setPatientDetailTarget(null);
       setIsMobileSidebarOpen(false);
       if (user) {
         if (user.role === 'therapist') {
@@ -410,6 +614,7 @@ export default function App() {
     setActiveExerciseDetail(null);
     setTherapistNavHistory([]);
     setDetailedPatientId(null);
+    setPatientDetailTarget(null);
     setIsMobileSidebarOpen(false);
 
     if (user.role === 'patient') {
@@ -435,6 +640,7 @@ export default function App() {
     setActiveExerciseDetail(null);
     setTherapistNavHistory([]);
     setDetailedPatientId(null);
+    setPatientDetailTarget(null);
     setIsMobileSidebarOpen(false);
 
     if (user.role === 'therapist') {
@@ -458,10 +664,12 @@ export default function App() {
   const handleConfirmLogout = () => {
     const userName = currentUser?.name || '사용자';
     AuthService.logout();
+    resetPatientFeedbackNotificationState();
     setCurrentUser(null);
     setIsLogoutModalOpen(false);
     setActiveExerciseDetail(null);
     setDetailedPatientId(null);
+    setPatientDetailTarget(null);
     setHasUnsavedChartChanges(false);
     setPendingAppExitAction(null);
     setTherapistNavHistory([]);
@@ -477,6 +685,329 @@ export default function App() {
     }
     setIsLogoutModalOpen(true);
   };
+
+  // Stage 3-B-3-1: 알림 팝업 '피드백 바로보기' 이동 처리 (실제 표시 확인 전 선제적 읽음 처리 금지)
+  const handleSelectNotificationFeedback = useCallback(
+    async (feedback: ClinicalFeedback) => {
+      if (!currentUser || currentUser.role !== 'patient') return;
+      if (!feedback || !feedback.id) return;
+      if (isNavigatingToFeedbackRef.current) return;
+
+      const expectedUserId = currentUser.id;
+      const navSeq = ++feedbackNavigationSeqRef.current;
+      const isNavStale = () => feedbackNavigationSeqRef.current !== navSeq;
+
+      isNavigatingToFeedbackRef.current = true;
+      setIsNavigatingToFeedback(true);
+      setNavigatingFeedbackId(feedback.id);
+
+      const normalizedWorkoutLogId =
+        typeof feedback.workoutLogId === 'string' && feedback.workoutLogId.trim()
+          ? feedback.workoutLogId.trim()
+          : null;
+
+      try {
+        // 1. 일반 피드백 (workoutLogId 없음) -> 마이페이지 피드백 섹션으로 직접 이동
+        if (!normalizedWorkoutLogId) {
+          if (isNavStale()) return;
+          setActiveExerciseDetail(null);
+          setIsGuidedWorkoutOpen(false);
+          setIsFeedbackNotificationDismissed(true);
+          setPatientFeedbackTarget({
+            patientId: expectedUserId,
+            feedbackId: feedback.id,
+            workoutLogId: null,
+            destination: 'profile',
+            requestKey: Date.now()
+          });
+          setPatientTab('profile');
+          return;
+        }
+
+        // 2. 운동 기록과 연결된 피드백 -> 로컬 기록 확인 후 없으면 원격 조회
+        const localLogs = StorageService.getWorkoutLogs(expectedUserId);
+        let matchedLog: WorkoutLog | null =
+          localLogs.find((log) => log.id === normalizedWorkoutLogId) ||
+          remotePatientWorkoutLogs.find((log) => log.id === normalizedWorkoutLogId) ||
+          null;
+
+        if (!matchedLog) {
+          const authUid = await waitForFirebaseAuthUid();
+          if (isNavStale()) return;
+
+          if (authUid && authUid === expectedUserId) {
+            const fetchedLogs = await FirebaseService.getWorkoutLogs(authUid);
+            if (isNavStale()) return;
+
+            const activeAuthUid = getFirebaseAuth()?.currentUser?.uid || null;
+            if (activeAuthUid !== expectedUserId) {
+              return;
+            }
+
+            if (fetchedLogs.length > 0) {
+              setRemotePatientWorkoutLogs(fetchedLogs);
+            }
+            matchedLog = fetchedLogs.find((log) => log.id === normalizedWorkoutLogId) || null;
+          }
+        }
+
+        if (isNavStale()) return;
+
+        setActiveExerciseDetail(null);
+        setIsGuidedWorkoutOpen(false);
+        setIsFeedbackNotificationDismissed(true);
+
+        if (matchedLog) {
+          setPatientFeedbackTarget({
+            patientId: expectedUserId,
+            feedbackId: feedback.id,
+            workoutLogId: matchedLog.id,
+            destination: 'history',
+            requestKey: Date.now()
+          });
+          setPatientTab('history');
+        } else {
+          // 연결된 운동 기록을 찾지 못한 경우 마이페이지 피드백 섹션으로 안전 폴백
+          setPatientFeedbackTarget({
+            patientId: expectedUserId,
+            feedbackId: feedback.id,
+            workoutLogId: null,
+            destination: 'profile',
+            requestKey: Date.now()
+          });
+          setPatientTab('profile');
+          addToast(
+            'info',
+            '연결된 운동 기록을 찾을 수 없어 마이페이지로 이동했습니다.',
+            '물리치료사 소견 및 피드백 목록에서 해당 내용을 확인하실 수 있습니다.'
+          );
+        }
+      } catch (error) {
+        if (isNavStale()) return;
+        console.warn('Notification feedback navigation fallback:', error);
+        setActiveExerciseDetail(null);
+        setIsGuidedWorkoutOpen(false);
+        setIsFeedbackNotificationDismissed(true);
+        setPatientFeedbackTarget({
+          patientId: expectedUserId,
+          feedbackId: feedback.id,
+          workoutLogId: null,
+          destination: 'profile',
+          requestKey: Date.now()
+        });
+        setPatientTab('profile');
+        addToast(
+          'error',
+          '연결된 운동 기록을 불러오지 못해 마이페이지로 이동했습니다.',
+          '물리치료사 소견 및 피드백 목록에서 내용을 확인해 주세요.'
+        );
+      } finally {
+        if (!isNavStale()) {
+          isNavigatingToFeedbackRef.current = false;
+          setIsNavigatingToFeedback(false);
+          setNavigatingFeedbackId(null);
+        }
+      }
+    },
+    [currentUser, remotePatientWorkoutLogs]
+  );
+
+  // Stage 3-B-3-2: 실제 피드백 화면 표시 확인 후 Firebase 읽음 상태 영구 저장 (낙관적 갱신 금지)
+  const persistConfirmedFeedbackRead = useCallback(
+    async (feedback: ClinicalFeedback, isRetry: boolean) => {
+      if (!currentUser || currentUser.role !== 'patient') return;
+      if (!feedback || !feedback.id) return;
+
+      const expectedUserId = currentUser.id;
+      const target = patientFeedbackTarget;
+
+      // 1. 충돌 오버레이 활성화 시 자동/재시도 모두 차단
+      if (activeExerciseDetail || isGuidedWorkoutOpen) {
+        return;
+      }
+
+      // 2. 다른 계정의 피드백 여부 및 본인 원격 피드백 존재·소유권 검증
+      const ownerId = (feedback as ClinicalFeedback & { patientId?: string }).patientId;
+      if (ownerId && ownerId !== expectedUserId) {
+        return;
+      }
+      const matchedRemoteFeedback = remotePatientFeedbacks.find((item) => item.id === feedback.id);
+      if (!matchedRemoteFeedback) {
+        return;
+      }
+      const remoteOwnerId = (matchedRemoteFeedback as ClinicalFeedback & { patientId?: string }).patientId;
+      if (remoteOwnerId && remoteOwnerId !== expectedUserId) {
+        return;
+      }
+
+      // 3. 경로별 대상 및 현재 표시 화면 검증
+      if (!isRetry) {
+        // 자동 읽음 처리 경로: 이동 대상·계정·현재 표시 탭 일치 조건 기존 그대로 엄격 유지
+        if (!target || target.feedbackId !== feedback.id || target.patientId !== expectedUserId) {
+          return;
+        }
+        if (patientTab !== target.destination) {
+          return;
+        }
+      } else {
+        // 명시적 '다시 시도' 경로:
+        // onRetryMarkRead 콜백은 PatientHistory / PatientProfile의 실제 렌더링된 피드백 카드 내부 버튼에서만 호출됨
+        if (target && target.patientId !== expectedUserId) {
+          return;
+        }
+        if (!feedbackReadSaveErrors[feedback.id]) {
+          return;
+        }
+        if (!matchedRemoteFeedback.content || !matchedRemoteFeedback.content.trim()) {
+          return;
+        }
+
+        const normalizedWorkoutLogId =
+          typeof matchedRemoteFeedback.workoutLogId === 'string' &&
+          matchedRemoteFeedback.workoutLogId.trim()
+            ? matchedRemoteFeedback.workoutLogId.trim()
+            : null;
+        const hasRenderableHistoryLog =
+          Boolean(normalizedWorkoutLogId) &&
+          (StorageService.getWorkoutLogs(expectedUserId).some(
+            (log) => log.id === normalizedWorkoutLogId
+          ) ||
+            remotePatientWorkoutLogs.some(
+              (log) =>
+                log.id === normalizedWorkoutLogId &&
+                (!log.patientId || log.patientId === expectedUserId)
+            ));
+        const canDisplayFeedbackOnCurrentTab =
+          patientTab === 'profile' ||
+          (patientTab === 'history' && hasRenderableHistoryLog);
+
+        if (!canDisplayFeedbackOnCurrentTab) {
+          return;
+        }
+      }
+
+      // 4. 이미 읽음 처리된 피드백이면 중복 저장 생략
+      if (feedbackReadStateMap[feedback.id]) {
+        setFeedbackReadSaveErrors((prev) => {
+          if (!prev[feedback.id]) return prev;
+          const next = { ...prev };
+          delete next[feedback.id];
+          return next;
+        });
+        return;
+      }
+
+      // 자동 표시 콜백에서 직전 실패 상태가 이미 있으면 사용자의 명시적 재시도 전까지 반복 호출 방지
+      if (!isRetry && feedbackReadSaveErrors[feedback.id]) {
+        return;
+      }
+
+      // 5. 동일 피드백에 대한 동시 중복 저장 요청 차단 (in-flight Set)
+      if (markingFeedbackIdsRef.current.has(feedback.id)) {
+        return;
+      }
+
+      const readSessionSeq = feedbackReadActionSeqRef.current;
+      const isReadSessionStale = () => feedbackReadActionSeqRef.current !== readSessionSeq;
+
+      markingFeedbackIdsRef.current.add(feedback.id);
+      setMarkingFeedbackIds((prev) => ({ ...prev, [feedback.id]: true }));
+
+      try {
+        // 6. Firebase Auth UID 복원 및 환자 ID 일치 확인
+        const authUid = await waitForFirebaseAuthUid();
+        if (isReadSessionStale()) return;
+
+        if (!authUid || authUid !== expectedUserId) {
+          setFeedbackReadSaveErrors((prev) => ({
+            ...prev,
+            [feedback.id]: {
+              code: 'unauthenticated',
+              message: '로그인 인증 정보를 확인할 수 없어 읽음 상태를 저장하지 못했습니다.'
+            }
+          }));
+          return;
+        }
+
+        const currentAuthUid = getFirebaseAuth()?.currentUser?.uid || null;
+        if (currentAuthUid !== expectedUserId) {
+          return;
+        }
+
+        // 7. 기존 FirebaseService.markFeedbackAsRead(patientId, feedbackId) 재사용
+        const result = await FirebaseService.markFeedbackAsRead(authUid, feedback.id);
+        if (isReadSessionStale()) return;
+
+        // 응답 커밋 직전 활성 Auth UID 재검증 (계정 전환 경합 방어)
+        const activeAuthUidAfterSave = getFirebaseAuth()?.currentUser?.uid || null;
+        if (activeAuthUidAfterSave !== expectedUserId) {
+          return;
+        }
+
+        // 8. 서버 저장 성공 응답을 받은 경우에만 읽음 상태 반영 (unreadNotificationFeedbacks는 useMemo로 자동 갱신)
+        setPatientFeedbackReadStates((prev) => {
+          if (prev.some((item) => item.feedbackId === result.readState.feedbackId)) {
+            return prev;
+          }
+          return [...prev, result.readState];
+        });
+
+        setFeedbackReadSaveErrors((prev) => {
+          if (!prev[feedback.id]) return prev;
+          const next = { ...prev };
+          delete next[feedback.id];
+          return next;
+        });
+      } catch (error) {
+        if (isReadSessionStale()) return;
+        const classified = classifyFeedbackReadError(error);
+        console.warn('Failed to save feedback read state:', {
+          feedbackId: feedback.id,
+          ...classified
+        });
+        // 실패 시 읽음 상태 및 미읽음 목록을 절대 변경하지 않고 해당 피드백 카드에 오류·재시도 표시
+        setFeedbackReadSaveErrors((prev) => ({
+          ...prev,
+          [feedback.id]: classified
+        }));
+      } finally {
+        if (!isReadSessionStale()) {
+          markingFeedbackIdsRef.current.delete(feedback.id);
+          setMarkingFeedbackIds((prev) => {
+            if (!prev[feedback.id]) return prev;
+            const next = { ...prev };
+            delete next[feedback.id];
+            return next;
+          });
+        }
+      }
+    },
+    [
+      currentUser,
+      patientFeedbackTarget,
+      patientTab,
+      activeExerciseDetail,
+      isGuidedWorkoutOpen,
+      remotePatientFeedbacks,
+      remotePatientWorkoutLogs,
+      feedbackReadStateMap,
+      feedbackReadSaveErrors
+    ]
+  );
+
+  const handleConfirmFeedbackViewed = useCallback(
+    (feedback: ClinicalFeedback) => {
+      void persistConfirmedFeedbackRead(feedback, false);
+    },
+    [persistConfirmedFeedbackRead]
+  );
+
+  const handleRetryMarkFeedbackAsRead = useCallback(
+    (feedback: ClinicalFeedback) => {
+      void persistConfirmedFeedbackRead(feedback, true);
+    },
+    [persistConfirmedFeedbackRead]
+  );
 
   // Patient detail & completion handlers
   const handleOpenExerciseDetail = (exercise: Exercise, assignmentId: string) => {
@@ -513,14 +1044,17 @@ export default function App() {
       const currentSnapshot = {
         tab: VALID_THERAPIST_TABS.has(therapistTab) ? therapistTab : 'dashboard',
         detailedPatientId,
-        selectedPatientId: selectedPatientForTherapist
+        selectedPatientId: selectedPatientForTherapist,
+        patientDetailTarget
       };
       const last = prev[prev.length - 1];
       if (
         last &&
         last.tab === currentSnapshot.tab &&
         last.detailedPatientId === currentSnapshot.detailedPatientId &&
-        last.selectedPatientId === currentSnapshot.selectedPatientId
+        last.selectedPatientId === currentSnapshot.selectedPatientId &&
+        last.patientDetailTarget?.targetWorkoutLogId === currentSnapshot.patientDetailTarget?.targetWorkoutLogId &&
+        last.patientDetailTarget?.initialTab === currentSnapshot.patientDetailTarget?.initialTab
       ) {
         return prev;
       }
@@ -541,6 +1075,7 @@ export default function App() {
     }
 
     setDetailedPatientId(null);
+    setPatientDetailTarget(null);
     setHasUnsavedChartChanges(false);
     setTherapistTab(targetTab);
     if (patientId !== undefined) {
@@ -556,12 +1091,34 @@ export default function App() {
     performTherapistNavigateTab(tab, patientId);
   };
 
-  const handleOpenTherapistPatientDetail = (patientId: string) => {
+  const handleOpenTherapistPatientDetail = (
+    patientId: string,
+    options?: {
+      initialTab?: 'info' | 'soap' | 'activity';
+      initialActivitySubTab?: 'logs' | 'videos' | 'feedback';
+      targetWorkoutLogId?: string | null;
+    }
+  ) => {
     if (!patientId) return;
-    if (detailedPatientId !== patientId) {
+    const nextTab = options?.initialTab || 'info';
+    const nextActivitySubTab = options?.initialActivitySubTab || 'logs';
+    const nextTargetLogId = options?.targetWorkoutLogId || null;
+
+    if (
+      detailedPatientId !== patientId ||
+      patientDetailTarget?.initialTab !== nextTab ||
+      patientDetailTarget?.targetWorkoutLogId !== nextTargetLogId
+    ) {
       pushTherapistHistory();
     }
+
     setSelectedPatientForTherapist(patientId);
+    setPatientDetailTarget({
+      initialTab: nextTab,
+      initialActivitySubTab: nextActivitySubTab,
+      targetWorkoutLogId: nextTargetLogId,
+      requestKey: Date.now()
+    });
     setDetailedPatientId(patientId);
   };
 
@@ -576,6 +1133,12 @@ export default function App() {
       tab: string;
       detailedPatientId: string | null;
       selectedPatientId: string;
+      patientDetailTarget?: {
+        initialTab: 'info' | 'soap' | 'activity';
+        initialActivitySubTab?: 'logs' | 'videos' | 'feedback';
+        targetWorkoutLogId: string | null;
+        requestKey: number;
+      } | null;
     } | null = null;
 
     while (nextHistory.length > 0) {
@@ -593,7 +1156,8 @@ export default function App() {
       targetState = {
         tab: validTab,
         detailedPatientId: validDetailId,
-        selectedPatientId: candidate.selectedPatientId
+        selectedPatientId: candidate.selectedPatientId,
+        patientDetailTarget: validDetailId ? candidate.patientDetailTarget || null : null
       };
       break;
     }
@@ -604,6 +1168,7 @@ export default function App() {
     if (targetState) {
       setTherapistTab(targetState.tab);
       setDetailedPatientId(targetState.detailedPatientId);
+      setPatientDetailTarget(targetState.patientDetailTarget || null);
       if (targetState.selectedPatientId && validPatientIds.has(targetState.selectedPatientId)) {
         setSelectedPatientForTherapist(targetState.selectedPatientId);
       }
@@ -613,6 +1178,7 @@ export default function App() {
     // Fallback when no previous history entry exists
     if (detailedPatientId !== null) {
       setDetailedPatientId(null);
+      setPatientDetailTarget(null);
       if (!VALID_THERAPIST_TABS.has(therapistTab)) {
         setTherapistTab('dashboard');
       }
@@ -713,6 +1279,7 @@ export default function App() {
           setIsGuidedWorkoutOpen(false);
           if (currentUser.role === 'patient') {
             setDetailedPatientId(null);
+            setPatientFeedbackTarget(null);
             setPatientTab(tab);
           } else {
             handleTherapistNavigateTab(tab);
@@ -780,12 +1347,50 @@ export default function App() {
                       onOpenExerciseDetail={handleOpenExerciseDetail}
                     />
                   ) : patientTab === 'history' ? (
-                    <PatientHistory patient={currentPatient} />
+                    <PatientHistory
+                      patient={currentPatient}
+                      remoteWorkoutLogs={remotePatientWorkoutLogs}
+                      remoteFeedbacks={remotePatientFeedbacks}
+                      targetWorkoutLogId={
+                        patientFeedbackTarget?.destination === 'history'
+                          ? patientFeedbackTarget.workoutLogId
+                          : null
+                      }
+                      targetFeedbackId={
+                        patientFeedbackTarget?.destination === 'history'
+                          ? patientFeedbackTarget.feedbackId
+                          : null
+                      }
+                      feedbackTargetRequestKey={
+                        patientFeedbackTarget?.destination === 'history'
+                          ? patientFeedbackTarget.requestKey
+                          : undefined
+                      }
+                      onFeedbackDisplayed={handleConfirmFeedbackViewed}
+                      markingFeedbackIds={markingFeedbackIds}
+                      feedbackReadSaveErrors={feedbackReadSaveErrors}
+                      onRetryMarkRead={handleRetryMarkFeedbackAsRead}
+                    />
                   ) : (
                     <PatientProfile
                       patient={currentPatient}
                       onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
                       onConnectionUpdated={() => setTick((t) => t + 1)}
+                      remoteFeedbacks={remotePatientFeedbacks}
+                      targetFeedbackId={
+                        patientFeedbackTarget?.destination === 'profile'
+                          ? patientFeedbackTarget.feedbackId
+                          : null
+                      }
+                      feedbackTargetRequestKey={
+                        patientFeedbackTarget?.destination === 'profile'
+                          ? patientFeedbackTarget.requestKey
+                          : undefined
+                      }
+                      onFeedbackDisplayed={handleConfirmFeedbackViewed}
+                      markingFeedbackIds={markingFeedbackIds}
+                      feedbackReadSaveErrors={feedbackReadSaveErrors}
+                      onRetryMarkRead={handleRetryMarkFeedbackAsRead}
                     />
                   )}
                 </div>
@@ -795,6 +1400,7 @@ export default function App() {
                   currentTab={patientTab}
                   onTabChange={(tab) => {
                     setActiveExerciseDetail(null);
+                    setPatientFeedbackTarget(null);
                     setPatientTab(tab);
                   }}
                 />
@@ -823,13 +1429,51 @@ export default function App() {
                     onOpenExerciseDetail={handleOpenExerciseDetail}
                   />
                 ) : patientTab === 'history' ? (
-                  <PatientHistory patient={currentPatient} />
+                  <PatientHistory
+                    patient={currentPatient}
+                    remoteWorkoutLogs={remotePatientWorkoutLogs}
+                    remoteFeedbacks={remotePatientFeedbacks}
+                    targetWorkoutLogId={
+                      patientFeedbackTarget?.destination === 'history'
+                        ? patientFeedbackTarget.workoutLogId
+                        : null
+                    }
+                    targetFeedbackId={
+                      patientFeedbackTarget?.destination === 'history'
+                        ? patientFeedbackTarget.feedbackId
+                        : null
+                    }
+                    feedbackTargetRequestKey={
+                      patientFeedbackTarget?.destination === 'history'
+                        ? patientFeedbackTarget.requestKey
+                        : undefined
+                    }
+                    onFeedbackDisplayed={handleConfirmFeedbackViewed}
+                    markingFeedbackIds={markingFeedbackIds}
+                    feedbackReadSaveErrors={feedbackReadSaveErrors}
+                    onRetryMarkRead={handleRetryMarkFeedbackAsRead}
+                  />
                 ) : (
                   <PatientProfile
                     patient={currentPatient}
                     onOpenLogoutModal={() => setIsLogoutModalOpen(true)}
                     onConnectionUpdated={() => setTick((t) => t + 1)}
                     onOpenGuide={() => setIsOnboardingGuideOpen(true)}
+                    remoteFeedbacks={remotePatientFeedbacks}
+                    targetFeedbackId={
+                      patientFeedbackTarget?.destination === 'profile'
+                        ? patientFeedbackTarget.feedbackId
+                        : null
+                    }
+                    feedbackTargetRequestKey={
+                      patientFeedbackTarget?.destination === 'profile'
+                        ? patientFeedbackTarget.requestKey
+                        : undefined
+                    }
+                    onFeedbackDisplayed={handleConfirmFeedbackViewed}
+                    markingFeedbackIds={markingFeedbackIds}
+                    feedbackReadSaveErrors={feedbackReadSaveErrors}
+                    onRetryMarkRead={handleRetryMarkFeedbackAsRead}
                   />
                 )}
 
@@ -838,6 +1482,7 @@ export default function App() {
                   currentTab={patientTab}
                   onTabChange={(tab) => {
                     setActiveExerciseDetail(null);
+                    setPatientFeedbackTarget(null);
                     setPatientTab(tab);
                   }}
                 />
@@ -879,55 +1524,93 @@ export default function App() {
 
             {/* Main Content Area */}
             <div className="flex-1 py-6 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
-              {detailedPatientId ? (
-                <TherapistPatientDetailView
-                  currentUser={currentUser}
-                  patient={
-                    allPatients.find((p) => p.id === detailedPatientId) ||
-                    therapistPatients[0] ||
-                    allPatients[0]
-                  }
-                  onBack={handleTherapistBack}
-                  onNavigateToProgramEditor={(patientId) => {
-                    handleTherapistNavigateTab('prescriptions', patientId);
-                  }}
-                  onDirtyChange={setHasUnsavedChartChanges}
-                  onPatientDisconnected={(patientName) => {
-                    const disconnectedId = detailedPatientId;
-                    setTherapistNavHistory((prev) =>
-                      prev.map((entry) =>
-                        entry.detailedPatientId === disconnectedId
-                          ? { ...entry, detailedPatientId: null }
-                          : entry
-                      )
-                    );
-                    setDetailedPatientId(null);
-                    setTherapistTab('patients');
-                    setTick((t) => t + 1);
-                    addToast(
-                      'info',
-                      '환자 연결 해제 완료',
-                      `'${patientName}' 환자와의 연결이 안전하게 해제되었습니다. 기존 운동 기록과 처방 이력은 보존됩니다.`
-                    );
-                  }}
-                  onFeedbackSaved={() => {
-                    setTick((t) => t + 1);
-                    addToast(
-                      'success',
-                      '임상 기록 저장 완료',
-                      '환자 화면에 최신 처방 및 피드백이 실시간 반영되었습니다.'
-                    );
-                  }}
-                  onPatientUpdated={() => {
-                    setTick((t) => t + 1);
-                    addToast(
-                      'success',
-                      '진단명 저장 완료',
-                      '환자 차트 및 임상 프로필에 새로운 진단명이 정상 반영되었습니다.'
-                    );
-                  }}
-                />
-              ) : (
+              {detailedPatientId ? (() => {
+                const therapistConnections = StorageService.getConnectionsForTherapist(currentUser);
+                const knownPatientIds = new Set([
+                  ...therapistPatients.map((p) => p.id),
+                  ...therapistConnections
+                    .filter((c) => c.status === 'connected' || c.status === 'disconnected')
+                    .map((c) => c.patientId)
+                ]);
+                const matchedPatient =
+                  therapistPatients.find((p) => p.id === detailedPatientId) ||
+                  (knownPatientIds.has(detailedPatientId)
+                    ? allPatients.find((p) => p.id === detailedPatientId)
+                    : undefined);
+
+                if (!matchedPatient) {
+                  return (
+                    <div className="max-w-3xl mx-auto py-8">
+                      <div className="bg-white rounded-2xl border border-rose-200 p-8 text-center space-y-4 shadow-xs">
+                        <h2 className="text-base font-bold text-gray-900">
+                          요청한 환자 정보 또는 운동 기록에 접근할 수 없습니다
+                        </h2>
+                        <p className="text-xs text-gray-600 leading-relaxed max-w-md mx-auto">
+                          해당 환자가 담당 환자 목록에 없거나 기록이 삭제되었을 수 있습니다. 다른 환자의 기록을 대신 표시하지 않도록 안전하게 차단했습니다.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleTherapistBack}
+                          className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl cursor-pointer transition-colors"
+                        >
+                          이전 화면으로 돌아가기
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <TherapistPatientDetailView
+                    currentUser={currentUser}
+                    patient={matchedPatient}
+                    initialTab={patientDetailTarget?.initialTab}
+                    initialActivitySubTab={patientDetailTarget?.initialActivitySubTab}
+                    targetWorkoutLogId={patientDetailTarget?.targetWorkoutLogId}
+                    navigationRequestKey={patientDetailTarget?.requestKey}
+                    onBack={handleTherapistBack}
+                    onNavigateToProgramEditor={(patientId) => {
+                      handleTherapistNavigateTab('prescriptions', patientId);
+                    }}
+                    onDirtyChange={setHasUnsavedChartChanges}
+                    onPatientDisconnected={(patientName) => {
+                      const disconnectedId = detailedPatientId;
+                      setTherapistNavHistory((prev) =>
+                        prev.map((entry) =>
+                          entry.detailedPatientId === disconnectedId
+                            ? { ...entry, detailedPatientId: null, patientDetailTarget: null }
+                            : entry
+                        )
+                      );
+                      setDetailedPatientId(null);
+                      setPatientDetailTarget(null);
+                      setTherapistTab('patients');
+                      setTick((t) => t + 1);
+                      addToast(
+                        'info',
+                        '환자 연결 해제 완료',
+                        `'${patientName}' 환자와의 연결이 안전하게 해제되었습니다. 기존 운동 기록과 처방 이력은 보존됩니다.`
+                      );
+                    }}
+                    onFeedbackSaved={() => {
+                      setTick((t) => t + 1);
+                      addToast(
+                        'success',
+                        '임상 기록 저장 완료',
+                        '환자 화면에 최신 처방 및 피드백이 실시간 반영되었습니다.'
+                      );
+                    }}
+                    onPatientUpdated={() => {
+                      setTick((t) => t + 1);
+                      addToast(
+                        'success',
+                        '진단명 저장 완료',
+                        '환자 차트 및 임상 프로필에 새로운 진단명이 정상 반영되었습니다.'
+                      );
+                    }}
+                  />
+                );
+              })() : (
                 <>
                   {therapistTab === 'dashboard' && (
                     <TherapistDashboard
@@ -978,6 +1661,17 @@ export default function App() {
           </div>
         ) : null}
       </main>
+
+      {/* Patient New Feedback Notification Modal (Stage 3-B-3-1: navigation wired, read-state write still excluded) */}
+      <PatientFeedbackNotificationModal
+        isOpen={shouldShowFeedbackNotificationModal}
+        feedbacks={unreadNotificationFeedbacks}
+        patient={currentPatient}
+        onClose={handleCloseFeedbackNotificationModal}
+        onSelectFeedback={handleSelectNotificationFeedback}
+        isNavigating={isNavigatingToFeedback}
+        navigatingFeedbackId={navigatingFeedbackId}
+      />
 
       {/* Onboarding Guide Modal */}
       {currentUser && (
