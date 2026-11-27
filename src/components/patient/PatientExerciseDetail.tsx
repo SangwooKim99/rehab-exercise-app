@@ -6,7 +6,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Exercise, Patient, AssignedExercise } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
+import { getExerciseVideoUrl } from '../../data/initialData';
 import { ExerciseSvgGuide } from '../common/ExerciseSvgGuide';
+import { ExerciseVideoPlayer } from '../common/ExerciseVideoPlayer';
 import { PatientVideoUploadSection } from './PatientVideoUploadSection';
 import { BodyPartBadge } from '../common/BodyPartIcons';
 import {
@@ -60,12 +62,13 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
   const [patientNotes, setPatientNotes] = useState<string>(existingLog?.patientNotes || '');
   const [formValidationMsg, setFormValidationMsg] = useState<string>('');
 
-  // Video & Motion Guide Playback State (defaults to playing so motion starts immediately)
+  // Video & Motion Guide Playback State (real MP4 videos never auto-play or auto-loop)
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const hasRealVideoUrl = Boolean(exercise.videoUrl && exercise.videoUrl.trim().length > 0);
+  const resolvedVideoUrl = getExerciseVideoUrl(exercise);
+  const hasRealVideoUrl = Boolean(resolvedVideoUrl);
   const [videoError, setVideoError] = useState<boolean>(false);
-  const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [isLooping, setIsLooping] = useState<boolean>(true);
+  const [isPlaying, setIsPlaying] = useState<boolean>(!hasRealVideoUrl);
+  const [isLooping, setIsLooping] = useState<boolean>(!hasRealVideoUrl);
   const [progressSec, setProgressSec] = useState<number>(0);
   const [videoDurationSec, setVideoDurationSec] = useState<number>(exercise.videoPlaceholder.durationSeconds);
 
@@ -78,14 +81,15 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
   // Reset playback state when switching exercise
   useEffect(() => {
     setVideoError(false);
-    setIsPlaying(true);
+    setIsPlaying(!hasRealVideoUrl);
+    setIsLooping(!hasRealVideoUrl);
     setProgressSec(0);
     setVideoDurationSec(exercise.videoPlaceholder.durationSeconds);
-  }, [exercise.id, exercise.videoUrl, exercise.videoPlaceholder.durationSeconds]);
+  }, [exercise.id, resolvedVideoUrl, hasRealVideoUrl, exercise.videoPlaceholder.durationSeconds]);
 
-  // Timer for motion guide when real video is not active
+  // Timer for motion guide when real video is not mapped
   useEffect(() => {
-    if (hasRealVideoUrl && !videoError) return;
+    if (hasRealVideoUrl) return;
 
     let interval: NodeJS.Timeout | null = null;
     if (isPlaying) {
@@ -105,7 +109,7 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isPlaying, isLooping, totalDuration, hasRealVideoUrl, videoError]);
+  }, [isPlaying, isLooping, totalDuration, hasRealVideoUrl]);
 
   // Hold posture timer effect
   useEffect(() => {
@@ -121,11 +125,12 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
   }, [isHolding]);
 
   const handleTogglePlay = () => {
-    if (hasRealVideoUrl && !videoError && videoRef.current) {
+    if (hasRealVideoUrl) {
+      if (videoError || !videoRef.current) return;
       if (videoRef.current.paused) {
         videoRef.current.play().catch(() => {
+          setIsPlaying(false);
           setVideoError(true);
-          setIsPlaying(true);
         });
       } else {
         videoRef.current.pause();
@@ -140,12 +145,14 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
   };
 
   const handleRestartVideo = () => {
-    if (hasRealVideoUrl && !videoError && videoRef.current) {
+    if (hasRealVideoUrl) {
+      if (videoError || !videoRef.current) return;
       videoRef.current.currentTime = 0;
+      setProgressSec(0);
       videoRef.current.play().catch(() => {
+        setIsPlaying(false);
         setVideoError(true);
       });
-      setIsPlaying(true);
       return;
     }
     setProgressSec(0);
@@ -266,7 +273,8 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
             <button
               type="button"
               onClick={handleTogglePlay}
-              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              disabled={hasRealVideoUrl && videoError}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
             >
               {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
               <span>{isPlaying ? '일시정지' : '재생'}</span>
@@ -274,51 +282,29 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
             <button
               type="button"
               onClick={handleRestartVideo}
-              className="px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors"
+              disabled={hasRealVideoUrl && videoError}
+              className="px-2.5 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 text-xs font-semibold flex items-center gap-1 transition-colors"
               title="처음부터 다시 보기"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>처음부터</span>
             </button>
-            <button
-              type="button"
-              onClick={() => setIsLooping((prev) => !prev)}
-              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 border transition-colors ${
-                isLooping
-                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                  : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              <Repeat className="w-3.5 h-3.5" />
-              <span>반복 {isLooping ? '켜짐' : '꺼짐'}</span>
-            </button>
+            {!hasRealVideoUrl && (
+              <button
+                type="button"
+                onClick={() => setIsLooping((prev) => !prev)}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 border transition-colors ${
+                  isLooping
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                <Repeat className="w-3.5 h-3.5" />
+                <span>반복 {isLooping ? '켜짐' : '꺼짐'}</span>
+              </button>
+            )}
           </div>
         </div>
-
-        {/* Video Error Fallback Banner */}
-        {hasRealVideoUrl && videoError && (
-          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start justify-between gap-3">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">
-                <p className="font-bold">운동 동영상 파일을 불러오지 못했습니다.</p>
-                <p className="text-[11px] text-amber-800 mt-0.5">
-                  영상이 보이지 않아도 아래의 <strong>실시간 동작 가이드</strong>와 설명을 보며 운동을 진행하고 완료 기록을 남기실 수 있습니다.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setVideoError(false);
-                setIsPlaying(true);
-              }}
-              className="px-2.5 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold text-[11px] shrink-0"
-            >
-              다시 시도
-            </button>
-          </div>
-        )}
 
         {/* Video Player / Interactive Anatomical Motion Viewport */}
         <div className="rounded-2xl border border-gray-200 overflow-hidden bg-slate-900 text-white">
@@ -327,15 +313,23 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
             <div className="flex items-center gap-2">
               <span
                 className={`w-2 h-2 rounded-full ${
-                  isPlaying ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'
+                  videoError
+                    ? 'bg-amber-400'
+                    : isPlaying
+                      ? 'bg-emerald-400 animate-pulse'
+                      : 'bg-slate-400'
                 }`}
               />
               <span className="font-semibold text-slate-100">
-                {hasRealVideoUrl && !videoError
-                  ? '운동 시범 동영상 재생'
+                {hasRealVideoUrl
+                  ? videoError
+                    ? '운동 영상 로드 실패'
+                    : isPlaying
+                      ? '운동 시범 영상 재생 중'
+                      : '운동 시범 영상 준비됨 (재생 버튼을 눌러 시작하세요)'
                   : isPlaying
-                  ? '해부학 동작 가이드 재생 중 (실제 촬영 영상 미등록)'
-                  : '해부학 동작 가이드 일시정지됨'}
+                    ? '해부학 동작 가이드 재생 중 (실제 촬영 영상 미등록)'
+                    : '해부학 동작 가이드 일시정지됨'}
               </span>
             </div>
             <span className="text-[11px] text-slate-300 bg-slate-700/80 px-2.5 py-0.5 rounded-md">
@@ -343,33 +337,23 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
             </span>
           </div>
 
-          {/* Viewport: HTML5 Video if videoUrl exists & works, else Animated ExerciseSvgGuide */}
-          <div className="relative p-4 sm:p-6 flex flex-col items-center justify-center bg-white">
-            {hasRealVideoUrl && !videoError ? (
-              <video
-                ref={videoRef}
-                src={exercise.videoUrl}
-                autoPlay
-                muted
-                loop={isLooping}
-                playsInline
-                controls
+          {/* Viewport: Real MP4 ExerciseVideoPlayer if mapped, else fallback ExerciseSvgGuide */}
+          <div className={`relative flex flex-col items-center justify-center ${hasRealVideoUrl ? 'p-2 sm:p-4 bg-slate-950' : 'p-4 sm:p-6 bg-white'}`}>
+            {resolvedVideoUrl ? (
+              <ExerciseVideoPlayer
+                src={resolvedVideoUrl}
+                title={exercise.name}
+                videoRef={videoRef}
+                forceError={videoError}
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
-                onLoadedMetadata={(e) => {
-                  const dur = Math.round(e.currentTarget.duration);
-                  if (dur && Number.isFinite(dur)) {
-                    setVideoDurationSec(dur);
-                  }
+                onEnded={() => setIsPlaying(false)}
+                onLoadedMetadata={(dur) => setVideoDurationSec(dur)}
+                onTimeUpdate={(sec) => setProgressSec(sec)}
+                onErrorChange={(err) => {
+                  setVideoError(err);
+                  if (err) setIsPlaying(false);
                 }}
-                onTimeUpdate={(e) => {
-                  setProgressSec(Math.floor(e.currentTarget.currentTime));
-                }}
-                onError={() => {
-                  setVideoError(true);
-                  setIsPlaying(true);
-                }}
-                className="w-full max-w-lg h-56 sm:h-64 object-contain rounded-xl bg-black"
               />
             ) : (
               <>
@@ -526,6 +510,9 @@ export const PatientExerciseDetail: React.FC<PatientExerciseDetailProps> = ({
                 onClick={() => {
                   const targetSec = Math.floor((idx / exercise.executionSteps.length) * totalDuration);
                   setProgressSec(targetSec);
+                  if (hasRealVideoUrl && !videoError && videoRef.current) {
+                    videoRef.current.currentTime = targetSec;
+                  }
                 }}
                 className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all cursor-pointer ${
                   isCurrentStep

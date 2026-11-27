@@ -5,8 +5,10 @@
 
 import React, { useState } from 'react';
 import { StorageService } from '../../services/storageService';
+import { getExerciseVideoUrl } from '../../data/initialData';
 import { Exercise, BodyPartCategory } from '../../types/rehab';
 import { ExerciseSvgGuide } from '../common/ExerciseSvgGuide';
+import { ExerciseVideoPlayer } from '../common/ExerciseVideoPlayer';
 import { BookOpen, Search, Sparkles, AlertTriangle, Info, Plus } from 'lucide-react';
 import { ALL_BODY_PARTS, BodyPartBadge } from '../common/BodyPartIcons';
 
@@ -165,13 +167,28 @@ export const TherapistExerciseLibrary: React.FC<TherapistExerciseLibraryProps> =
             </button>
           </div>
 
-          {/* SVG Movement Guide Diagram */}
-          <div className="rounded-2xl border border-gray-200 overflow-hidden bg-gray-50 p-4 flex justify-center">
-            <ExerciseSvgGuide
-              type={activeExercise.videoPlaceholder.illustrationType}
-              className="w-full max-w-md h-56 sm:h-64 object-contain"
-            />
-          </div>
+          {/* Real Exercise MP4 Video (fallback to SVG Movement Guide if unmapped) */}
+          {(() => {
+            const activeVideoUrl = getExerciseVideoUrl(activeExercise);
+            if (activeVideoUrl) {
+              return (
+                <div className="rounded-2xl border border-gray-200 overflow-hidden bg-slate-950 p-2 sm:p-3 flex justify-center">
+                  <ExerciseVideoPlayer
+                    src={activeVideoUrl}
+                    title={activeExercise.name}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div className="rounded-2xl border border-gray-200 overflow-hidden bg-gray-50 p-4 flex justify-center">
+                <ExerciseSvgGuide
+                  type={activeExercise.videoPlaceholder.illustrationType}
+                  className="w-full max-w-md h-56 sm:h-64 object-contain"
+                />
+              </div>
+            );
+          })()}
 
           {/* Detailed clinical cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">

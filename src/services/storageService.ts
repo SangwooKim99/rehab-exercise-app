@@ -125,7 +125,11 @@ export const StorageService = {
         const builtInMap = new Map(EXERCISE_LIBRARY.map((ex) => [ex.id, ex]));
         const synced = EXERCISE_LIBRARY.map((latestEx) => {
           const prev = Array.isArray(stored) ? stored.find((s) => s && s.id === latestEx.id) : undefined;
-          return prev?.videoUrl ? { ...latestEx, videoUrl: prev.videoUrl } : latestEx;
+          return latestEx.videoUrl
+            ? latestEx
+            : prev?.videoUrl
+              ? { ...latestEx, videoUrl: prev.videoUrl }
+              : latestEx;
         });
         const customExercises = Array.isArray(stored)
           ? stored.filter((s) => s && s.id && !builtInMap.has(s.id))
@@ -347,7 +351,11 @@ export const StorageService = {
       const builtInMap = new Map(EXERCISE_LIBRARY.map((ex) => [ex.id, ex]));
       const synced = EXERCISE_LIBRARY.map((latestEx) => {
         const prev = parsed.find((s) => s && s.id === latestEx.id);
-        return prev?.videoUrl ? { ...latestEx, videoUrl: prev.videoUrl } : latestEx;
+        return latestEx.videoUrl
+          ? latestEx
+          : prev?.videoUrl
+            ? { ...latestEx, videoUrl: prev.videoUrl }
+            : latestEx;
       });
       const customExercises = parsed.filter((s) => s && s.id && !builtInMap.has(s.id));
       return [...synced, ...customExercises];
