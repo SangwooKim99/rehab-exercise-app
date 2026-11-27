@@ -10,7 +10,9 @@ import {
   WorkoutDifficulty
 } from '../../types/rehab';
 import { StorageService } from '../../services/storageService';
+import { getExerciseVideoUrl } from '../../data/initialData';
 import { ExerciseSvgGuide } from '../common/ExerciseSvgGuide';
+import { ExerciseVideoPlayer } from '../common/ExerciseVideoPlayer';
 import {
   ArrowLeft,
   ArrowRight,
@@ -89,9 +91,11 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
   const currentExercise = currentAssignment ? library.find((e) => e.id === currentAssignment.exerciseId) : null;
   const currentDraft = currentAssignment ? drafts[currentAssignment.assignmentId] : null;
 
-  // Video & Motion Guide Playback State
+  // Video & Motion Guide Playback State (real MP4 videos never auto-play or auto-loop)
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const resolvedVideoUrl = getExerciseVideoUrl(currentExercise);
+  const hasRealVideoUrl = Boolean(resolvedVideoUrl);
+  const [isPlaying, setIsPlaying] = useState<boolean>(!hasRealVideoUrl);
   const [videoError, setVideoError] = useState<boolean>(false);
 
   // Posture Hold Metronome State
@@ -114,9 +118,9 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
   useEffect(() => {
     setIsHolding(false);
     setHoldTimer(0);
-    setIsPlaying(true);
+    setIsPlaying(!hasRealVideoUrl);
     setVideoError(false);
-  }, [currentIndex]);
+  }, [currentIndex, hasRealVideoUrl]);
 
   const updateCurrentDraft = (field: keyof ExerciseDraft, value: any) => {
     if (!currentAssignment) return;
@@ -233,8 +237,6 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
 
   if (!currentExercise || !currentDraft) return null;
 
-  const hasRealVideoUrl = Boolean(currentExercise.videoUrl && currentExercise.videoUrl.trim().length > 0);
-
   return (
     <div className="space-y-6 pb-20">
       {/* Top Header & Step Progress Bar */}
@@ -298,10 +300,15 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
             </h2>
             <button
               type="button"
+              disabled={hasRealVideoUrl && videoError}
               onClick={() => {
-                if (hasRealVideoUrl && !videoError && videoRef.current) {
+                if (hasRealVideoUrl) {
+                  if (videoError || !videoRef.current) return;
                   if (videoRef.current.paused) {
-                    videoRef.current.play().catch(() => setVideoError(true));
+                    videoRef.current.play().catch(() => {
+                      setIsPlaying(false);
+                      setVideoError(true);
+                    });
                   } else {
                     videoRef.current.pause();
                   }
@@ -309,47 +316,28 @@ export const GuidedWorkoutSession: React.FC<GuidedWorkoutSessionProps> = ({
                   setIsPlaying((prev) => !prev);
                 }
               }}
-              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1 transition-colors"
+              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1 transition-colors"
             >
               {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-              <span>{isPlaying ? '일시정지' : '동작 재생'}</span>
+              <span>{isPlaying ? '일시정지' : hasRealVideoUrl ? '영상 재생' : '동작 재생'}</span>
             </button>
           </div>
 
-          {hasRealVideoUrl && videoError && (
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center justify-between gap-2">
-              <span>동영상을 불러오지 못해 실시간 동작 가이드로 전환되었습니다.</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setVideoError(false);
-                  setIsPlaying(true);
-                }}
-                className="px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 font-bold text-[11px]"
-              >
-                재시도
-              </button>
-            </div>
-          )}
-
           <div className="rounded-2xl border border-gray-200 overflow-hidden bg-slate-900">
-            <div className="relative p-4 bg-white flex justify-center">
-              {hasRealVideoUrl && !videoError ? (
-                <video
-                  ref={videoRef}
-                  src={currentExercise.videoUrl}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  controls
+            <div className={`relative flex justify-center ${hasRealVideoUrl ? 'p-2 sm:p-3 bg-slate-950' : 'p-4 bg-white'}`}>
+              {resolvedVideoUrl ? (
+                <ExerciseVideoPlayer
+                  src={resolvedVideoUrl}
+                  title={currentExercise.name}
+                  videoRef={videoRef}
+                  forceError={videoError}
                   onPlay={() => setIsPlaying(true)}
                   onPause={() => setIsPlaying(false)}
-                  onError={() => {
-                    setVideoError(true);
-                    setIsPlaying(true);
+                  onEnded={() => setIsPlaying(false)}
+                  onErrorChange={(err) => {
+                    setVideoError(err);
+                    if (err) setIsPlaying(false);
                   }}
-                  className="w-full max-w-md h-52 sm:h-60 object-contain rounded-xl bg-black"
                 />
               ) : (
                 <ExerciseSvgGuide

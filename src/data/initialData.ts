@@ -5,6 +5,28 @@
 
 import { Exercise, Patient, Therapist, WorkoutLog } from '../types/rehab';
 
+export const EXERCISE_VIDEO_MAP: Record<string, string> = {
+  'ex-1': '/exercise-videos/knee_to_chest.mp4',
+  'ex-2': '/exercise-videos/cat_camel.mp4',
+  'ex-3': '/exercise-videos/lower_trunk_rotation.mp4',
+  'ex-4': '/exercise-videos/abdominal_bracing.mp4',
+  'ex-5': '/exercise-videos/bird_dog.mp4',
+  'ex-6': '/exercise-videos/dead_bug.mp4',
+  'ex-7': '/exercise-videos/bridge.mp4',
+  'ex-8': '/exercise-videos/clamshell.mp4',
+  'ex-9': '/exercise-videos/side_lying_hip_abduction.mp4'
+};
+
+export function getExerciseVideoUrl(
+  exercise?: Pick<Exercise, 'id' | 'videoUrl'> | null
+): string | undefined {
+  if (!exercise) return undefined;
+  const mappedUrl = EXERCISE_VIDEO_MAP[exercise.id];
+  if (mappedUrl) return mappedUrl;
+  const customUrl = typeof exercise.videoUrl === 'string' ? exercise.videoUrl.trim() : '';
+  return customUrl || undefined;
+}
+
 export const EXERCISE_LIBRARY: Exercise[] = [
   {
     id: 'ex-1',
@@ -12,6 +34,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '유연성/스트레칭',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-1'],
     targetArea: '허리 아래쪽과 엉덩이 근육 (요추·둔근)',
     purpose: '뭉친 허리 아래쪽과 엉덩이 근육을 부드럽게 늘려주어, 허리에 가해지는 부담을 줄이고 움직임을 편안하게 만듭니다.',
     startPosition: '매트 위에 등을 대고 편안하게 누운 뒤, 두 무릎을 가볍게 세워 발바닥을 바닥에 붙입니다.',
@@ -41,6 +64,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '관절 가동성',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-2'],
     targetArea: '등과 허리 전체 (척추 마디)',
     purpose: '굳어 있는 등뼈와 허리뼈를 위아래로 부드럽게 움직여 척추를 유연하게 만들고, 등·허리 근육의 긴장을 풀어줍니다.',
     startPosition: '바닥에 양손과 양 무릎을 대고 엎드린 네발기기 자세를 만듭니다. 양손은 어깨 바로 아래에, 양 무릎은 골반 바로 아래에 놓습니다.',
@@ -69,6 +93,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '관절 가동성',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-3'],
     targetArea: '허리 옆쪽과 옆구리 근육',
     purpose: '굳은 허리와 골반을 좌우로 부드럽게 돌려주어 허리 회전 움직임을 편하게 하고 옆구리 근육을 늘려줍니다.',
     startPosition: '매트에 등을 대고 누워 두 무릎을 세워 붙이고, 양팔은 옆으로 벌려 양쪽 어깨가 바닥에 잘 닿도록 합니다.',
@@ -98,6 +123,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '코어 안정화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-4'],
     targetArea: '배 안쪽 깊은 근육과 허리 지지 근육 (코어 근육)',
     purpose: '배 둘레 근육에 고르게 힘을 주어 허리뼈를 든든하게 받쳐주고, 일상생활에서 허리에 가는 부담을 줄여줍니다.',
     startPosition: '등을 대고 누워 무릎을 세운 뒤, 양손 끝을 골반뼈 안쪽의 아랫배 위에 가볍게 올려놓습니다.',
@@ -127,6 +153,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '코어 안정화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-5'],
     targetArea: '허리·등 지지 근육과 엉덩이 근육',
     purpose: '팔과 다리를 뻗는 동안 몸통이 흔들리지 않게 버티는 힘을 길러, 허리와 골반을 안정적으로 지지해 줍니다.',
     startPosition: '양손과 양 무릎을 바닥에 댄 네발기기 자세에서 등과 허리를 평평하게 펴고, 시선은 두 손 사이 바닥을 바라봅니다.',
@@ -156,6 +183,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '코어 안정화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-6'],
     targetArea: '앞쪽 배 근육과 허리·골반 지지 근육',
     purpose: '누워서 팔다리를 움직일 때 허리가 바닥에서 들뜨지 않게 잡는 힘을 길러 아랫배와 허리 중심 근육을 튼튼하게 합니다.',
     startPosition: '등을 대고 누워 양팔은 천장을 향해 뻗고, 두 다리는 무릎을 90도로 구부려 의자에 앉은 모양처럼 들어 올립니다.',
@@ -185,6 +213,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '근력 강화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-7'],
     targetArea: '엉덩이 근육과 허벅지 뒤쪽 근육',
     purpose: '엉덩이와 허벅지 뒤쪽 근육을 튼튼하게 만들어 걷거나 서 있을 때 허리에 실리는 부담을 덜어줍니다.',
     startPosition: '등을 대고 누워 두 무릎을 세우고, 양발은 골반 너비로 벌려 발뒤꿈치를 엉덩이에서 한 뼘 정도 떨어진 곳에 놓습니다.',
@@ -214,6 +243,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '근력 강화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-8'],
     targetArea: '엉덩이 옆쪽 근육과 허리·골반 지지 근육',
     purpose: '엉덩이 옆쪽 근육을 강화하여 걸을 때나 한 발로 설 때 골반이 한쪽으로 기울어지는 것을 막아줍니다.',
     startPosition: '옆으로 누워 팔이나 베개로 머리를 편안히 받치고, 무릎을 살짝 구부려 앞으로 당긴 뒤 양발 뒤꿈치를 서로 붙입니다.',
@@ -242,6 +272,7 @@ export const EXERCISE_LIBRARY: Exercise[] = [
     category: '근력 강화',
     bodyParts: ['허리·몸통'],
     isPrescribable: true,
+    videoUrl: EXERCISE_VIDEO_MAP['ex-9'],
     targetArea: '엉덩이 옆쪽 근육 (허리·골반 옆 지지 근육)',
     purpose: '다리를 옆으로 들어 올리는 엉덩이 옆 근육을 키워, 걸을 때 골반이 좌우로 흔들리지 않게 잡아줍니다.',
     startPosition: '옆으로 곧게 누워 아래쪽 다리는 무릎을 살짝 구부려 몸을 안정시키고, 위쪽 다리는 무릎을 곧게 폅니다.',
